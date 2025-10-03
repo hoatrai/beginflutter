@@ -1,15 +1,14 @@
 # ios/Podfile
 platform :ios, '15.0'
 
-# CocoaPods dependencies
+# CocoaPods setup
 use_frameworks!
 use_modular_headers!
 
-# Thêm repo Flutter
-require File.expand_path('../Flutter/Flutter.framework', __FILE__)
+# Thêm Flutter
+# Không require trực tiếp Flutter.framework nữa
 
 target 'Runner' do
   # Pods for Runner
-  flutter_root = File.expand_path('../Flutter', __FILE__)
-  eval(File.read(File.join(flutter_root, 'podhelper.rb')), binding)
+  flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
 end
