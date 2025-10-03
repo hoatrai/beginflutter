@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "679433855339",
+    "project_id": "noble-conduit-792",
+    "storage_bucket": "noble-conduit-792.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:679433855339:android:d06f2386d4d845464eec2e",
+        "android_client_info": {
+          "package_name": "com.example.beginflutter"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCR0m_MByFX61ENyHN-IBJAvHDejyTOt_A"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
