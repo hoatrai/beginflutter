@@ -9,7 +9,7 @@ workflows:
       xcode: 14.3
       cocoapods: default
       vars:
-        BUNDLE_ID: com.your.bundleid           # Thay bằng Bundle ID của bạn
+        BUNDLE_ID: com.example.beginflutter           # Thay bằng Bundle ID của bạn
         XCODE_SCHEME: Runner
         XCODE_WORKSPACE: Runner.xcworkspace
         CM_PROVISIONING_PROFILE: $CM_PROVISIONING_PROFILE
