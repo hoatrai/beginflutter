@@ -1,12 +1,15 @@
 # ios/Podfile
-
-platform :ios, '15.0'  # iOS minimum target required for firebase_core
+platform :ios, '15.0'
 
 # CocoaPods dependencies
 use_frameworks!
 use_modular_headers!
 
+# Thêm repo Flutter
+require File.expand_path('../Flutter/Flutter.framework', __FILE__)
+
 target 'Runner' do
-  # Flutter pods
-  flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
+  # Pods for Runner
+  flutter_root = File.expand_path('../Flutter', __FILE__)
+  eval(File.read(File.join(flutter_root, 'podhelper.rb')), binding)
 end
