@@ -6,7 +6,7 @@ workflows:
     working_directory: .
     environment:
       flutter: stable
-      xcode: 14.2
+      xcode: latest
       cocoapods: default
       vars:
         BUNDLE_ID: com.example.beginflutter           # Thay bằng Bundle ID của bạn
