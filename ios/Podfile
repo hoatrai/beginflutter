@@ -1,0 +1,12 @@
+# ios/Podfile
+
+platform :ios, '15.0'  # iOS minimum target required for firebase_core
+
+# CocoaPods dependencies
+use_frameworks!
+use_modular_headers!
+
+target 'Runner' do
+  # Flutter pods
+  flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
+end
