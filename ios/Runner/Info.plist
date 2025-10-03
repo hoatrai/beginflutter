@@ -30,7 +30,7 @@
 	<key>UIMainStoryboardFile</key>
 	<string>Main</string>
 	<key>MinimumOSVersion</key>
-	<string>11.0</string> <!-- thêm dòng này -->
+	<string>15.0</string> <!-- thêm dòng này -->
 	<key>NSLocationWhenInUseUsageDescription</key>
     <string>Ứng dụng cần dùng vị trí để tìm bạn nhậu gần bạn.</string>
 	<key>UISupportedInterfaceOrientations</key>
