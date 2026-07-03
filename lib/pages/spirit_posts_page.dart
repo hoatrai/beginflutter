@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../services/wordpress_service.dart';
 import 'post_detail_page.dart';
+import '../config/app_config.dart';
 
 class SpiritPostsPage extends StatefulWidget {
   const SpiritPostsPage({super.key});
@@ -9,7 +10,7 @@ class SpiritPostsPage extends StatefulWidget {
 }
 
 class _SpiritPostsPageState extends State<SpiritPostsPage> {
-  final service = WordPressService('https://spiritwebs.com');
+  final service = WordPressService('${AppConfig.webDomain}');
   final ScrollController _scrollController = ScrollController();
 
   List<Post> posts = [];

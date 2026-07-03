@@ -42,6 +42,33 @@ class Post {
   }
 }
 
+class Product {
+  final int id;
+  final String name;
+  final String description;
+  final double price;
+  final String image;
+
+  Product({
+    required this.id,
+    required this.name,
+    required this.description,
+    required this.price,
+    required this.image,
+  });
+
+  factory Product.fromJson(Map<String, dynamic> json) {
+    return Product(
+      id: json['id'] ?? 0,
+      name: json['name'] ?? '',
+      description: json['description'] ?? '',
+      price: double.tryParse(json['price']?.toString() ?? '0') ?? 0.0,
+      image: json['image'] ?? '',
+    );
+  }
+}
+
+
 /// ================= MODEL USER LOCATION =================
 class UserLocation {
   final int userId;
@@ -140,12 +167,13 @@ class WordPressService {
     }
   }
 
-  Future<void> updateUserLocation(String token, double latitude, double longitude) async {
+  Future<void> updateUserLocation(String token, int userId, double latitude, double longitude) async {
     final url = Uri.parse('$baseUrl/wp-json/spiritwebs/v1/update-location');
 
     final body = jsonEncode({
-      "lat": latitude,
-      "lng": longitude,
+      "user_id": userId,  // thêm ID
+      "latitude": latitude,
+      "longitude": longitude,
     });
 
     final response = await http.post(
@@ -175,4 +203,28 @@ class WordPressService {
       throw Exception("Lỗi fetch user locations");
     }
   }
+
+  // ----------- PRODUCT / DEAL -----------
+  Future<Map<String, dynamic>?> fetchProductById(int id) async {
+    try {
+      final url =
+      Uri.parse("$baseUrl/wp-json/spiritwebs/v1/product/$id");
+
+      final response = await http
+          .get(url)
+          .timeout(const Duration(seconds: 12));
+
+      if (response.statusCode == 200) {
+        return jsonDecode(response.body);
+      } else {
+        throw Exception(
+          "Failed to load product (${response.statusCode})",
+        );
+      }
+    } catch (e) {
+      print("❌ fetchProductById error: $e");
+      return null;
+    }
+  }
+
 }

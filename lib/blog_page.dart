@@ -1,23 +1,25 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_html/flutter_html.dart';
 import 'package:url_launcher/url_launcher.dart';
-import 'wordpress_service.dart';
+import 'services/wordpress_service.dart';
 
 class BlogPage extends StatefulWidget {
-  const BlogPage({super.key});
+  final String baseUrl;
+  const BlogPage({super.key, required this.baseUrl});
 
   @override
   State<BlogPage> createState() => _BlogPageState();
 }
 
 class _BlogPageState extends State<BlogPage> {
-  final service = WordPressService();
+  late final WordPressService service;
   late Future<List<Post>> postsFuture;
 
   @override
   void initState() {
     super.initState();
-    postsFuture = service.getPosts();
+    service = WordPressService(widget.baseUrl); // ✅ dùng widget.baseUrl
+    postsFuture = service.getPosts().then((data) => data['posts'] as List<Post>);
   }
 
   @override
@@ -91,11 +93,6 @@ class BlogDetailPage extends StatelessWidget {
               fontSize: FontSize(16),
               color: Colors.black87,
             )
-          },
-          onLinkTap: (url, _, __, ___) async {
-            if (url != null && await canLaunchUrl(Uri.parse(url))) {
-              await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
-            }
           },
         ),
       ),

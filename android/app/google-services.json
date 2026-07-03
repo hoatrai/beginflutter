@@ -16,6 +16,31 @@
       "api_key": [
         {
           "current_key": "AIzaSyCR0m_MByFX61ENyHN-IBJAvHDejyTOt_A"
+        },
+        {
+          "current_key": "AIzaSyAEa6mI7dKaWHxiDHvCnrA4WmLhl7S2kdM"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:679433855339:android:044aec99256479484eec2e",
+        "android_client_info": {
+          "package_name": "com.example.beginflutter2"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCR0m_MByFX61ENyHN-IBJAvHDejyTOt_A"
+        },
+        {
+          "current_key": "AIzaSyAEa6mI7dKaWHxiDHvCnrA4WmLhl7S2kdM"
         }
       ],
       "services": {

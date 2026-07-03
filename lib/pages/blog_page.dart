@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'blog_detail_page.dart';
+import '../config/app_config.dart';
 
 class BlogPage extends StatefulWidget {
   const BlogPage({super.key});
@@ -20,7 +21,7 @@ class _BlogPageState extends State<BlogPage> {
   }
 
   Future<void> fetchPosts() async {
-    final url = Uri.parse("https://spiritwebs.com/wp-json/wp/v2/posts");
+    final url = Uri.parse("${AppConfig.webDomain}/wp-json/wp/v2/posts");
     final response = await http.get(url);
     if (response.statusCode == 200) {
       setState(() {
@@ -38,7 +39,7 @@ class _BlogPageState extends State<BlogPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-          title: const Text("Blog Crypto", style: TextStyle(color: Colors.white)),
+          title: const Text("Sự kiện", style: TextStyle(color: Colors.white)),
           backgroundColor: Colors.blue),
       body: loading
           ? const Center(child: CircularProgressIndicator())

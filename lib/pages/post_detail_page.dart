@@ -46,9 +46,9 @@ class PostDetailPage extends StatelessWidget {
                   const SizedBox(height: 16),
                   Html(
                     data: post.content,
-                    onLinkTap: (url, context, attributes, element) {
+                    /*onLinkTap: (url, context, attributes, element) {
                       if (url != null) _launchURL(url);
-                    },
+                    },*/
                   ),
                 ],
               ),

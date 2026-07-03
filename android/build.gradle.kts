@@ -5,8 +5,6 @@ buildscript {
         mavenCentral()
     }
     dependencies {
-        // Gradle plugin Android
-        classpath("com.android.tools.build:gradle:8.1.1")
         // Google Services plugin (bắt buộc cho Firebase)
         classpath("com.google.gms:google-services:4.4.2")
     }
