@@ -261,9 +261,10 @@ class _GroupChatPageState extends State<GroupChatPage> {
     _sendTextNow(text);
   }
 
-  void _sendTextNow(String text) {
-    final msg = _Message(
-      id: "local_${DateTime.now().millisecondsSinceEpoch}",
+  Future<void> _sendTextNow(String text) async {
+    final tempId = "local_${DateTime.now().millisecondsSinceEpoch}";
+    final tempMsg = _Message(
+      id: tempId,
       senderId: widget.userId,
       senderName: widget.username,
       content: text,
@@ -271,18 +272,38 @@ class _GroupChatPageState extends State<GroupChatPage> {
       isOwn: true,
       avatarUrl: widget.userAvatar,
     );
-
-    messages.value = [...messages.value, msg];
+    messages.value = [...messages.value, tempMsg];
     _scrollToBottom();
 
-    _send("send_message", {
-      "content": text,
-      "sender_id": widget.userId,
-      "sender_name": widget.username,
-      "avatar_url": widget.userAvatar,
-    });
+    try {
+      final res = await http.post(
+        Uri.parse("${AppConfig.webDomain}/wp-json/spiritwebs/v1/send-group-message"),
+        headers: {"Content-Type": "application/json"},
+        body: jsonEncode({
+          "group_id": widget.groupId,
+          "sender_id": widget.userId,
+          "sender_name": widget.username,
+          "message": text,
+        }),
+      );
+      final data = jsonDecode(res.body);
+      final realId = data['data']['id'].toString();
 
-    _saveMessageToServer(msg);
+      // cập nhật local id
+      final idx = messages.value.indexWhere((m) => m.id == tempId);
+      if (idx != -1) messages.value[idx].id = realId;
+
+      // gửi socket VỚI id thật
+      _send("send_message", {
+        "id": realId,
+        "content": text,
+        "sender_id": widget.userId,
+        "sender_name": widget.username,
+        "avatar_url": widget.userAvatar,
+      });
+    } catch (e) {
+      debugPrint("❌ Save message error: $e");
+    }
   }
 
   Future<void> _saveMessageToServer(_Message msg) async {
