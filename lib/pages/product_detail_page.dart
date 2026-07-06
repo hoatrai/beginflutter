@@ -5,6 +5,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
@@ -238,6 +239,9 @@ class _ProductDetailPageState extends State<ProductDetailPage>
   // key = index in the carousel mediaList
   final Map<int, VideoPlayerController> _videoMap = {};
   Map<String, dynamic> _spinResult = {};
+
+  // ── Story-style carousel controller ─────────────────────────────────────────
+  final StoryProgressController _storyController = StoryProgressController();
 
   // ── WebSocket ──────────────────────────────────────────────────────────────
   late WebSocketChannel _channel;
@@ -926,7 +930,7 @@ class _ProductDetailPageState extends State<ProductDetailPage>
     }
 
     return Scaffold(
-      backgroundColor: Colors.transparent,
+      backgroundColor: const Color(0xFF1E3A8A), // thay vì Colors.transparent
       body: _GradientBackground(
         child: SafeArea(
           child: CustomScrollView(
@@ -1024,119 +1028,32 @@ class _ProductDetailPageState extends State<ProductDetailPage>
       );
     }
 
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(20),
-      child: SizedBox(
-        height: 300,
-        child: Stack(
-          children: [
-            // ── Swipeable page view ────────────────────────────────────────
-            PageView.builder(
-              controller: _pageController,
-              itemCount: mediaList.length,
-              onPageChanged: _onPageChanged,
-              itemBuilder: (_, i) {
-                final item = mediaList[i];
-                return item['type'] == 'video'
-                    ? _buildVideoSlide(item['url'] as String, i)
-                    : _buildImageSlide(item['url'] as String);
-              },
-            ),
-
-            // ── Gradient overlay at bottom ─────────────────────────────────
-            Positioned.fill(
-              child: IgnorePointer(
-                child: DecoratedBox(
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      colors: [
-                        Colors.transparent,
-                        Colors.black.withOpacity(0.45),
-                      ],
-                      begin: Alignment.topCenter,
-                      end: Alignment.bottomCenter,
-                    ),
-                  ),
-                ),
-              ),
-            ),
-
-            // ── Arrow buttons (left / right) ───────────────────────────────
-            if (mediaList.length > 1) ...[
-              Positioned(
-                left: 8,
-                top: 0, bottom: 0,
-                child: Center(child: _carouselArrow(left: true)),
-              ),
-              Positioned(
-                right: 8,
-                top: 0, bottom: 0,
-                child: Center(child: _carouselArrow(left: false)),
-              ),
-            ],
-
-            // ── Dot indicators ─────────────────────────────────────────────
-            if (mediaList.length > 1)
-              Positioned(
-                bottom: 10,
-                left: 0,
-                right: 0,
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: List.generate(mediaList.length, (i) {
-                    final active = i == _currentMediaIndex;
-                    return AnimatedContainer(
-                      duration: const Duration(milliseconds: 220),
-                      margin: const EdgeInsets.symmetric(horizontal: 3),
-                      width: active ? 18 : 6,
-                      height: 6,
-                      decoration: BoxDecoration(
-                        color: active ? Colors.white : Colors.white38,
-                        borderRadius: BorderRadius.circular(3),
-                      ),
-                    );
-                  }),
-                ),
-              ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _carouselArrow({required bool left}) {
-    return GestureDetector(
-      onTap: () {
-        final next = _currentMediaIndex + (left ? -1 : 1);
-        if (next < 0 || next >= (_pageController.positions.isNotEmpty
-            ? (_pageController.page?.round() ?? 0) + (left ? 0 : 1)
-            : 0)) {
-          return;
-        }
-        _pageController.animateToPage(
-          next,
-          duration: const Duration(milliseconds: 300),
-          curve: Curves.easeInOut,
-        );
+    // ── Carousel kiểu "story": auto-play ảnh + progress bar,
+    //    double-tap để thả tim ─────────────────────────────────────────────
+    return DoubleTapReaction(
+      onDoubleTap: () {
+        // Chỉ hiệu ứng thị giác. Nếu sau này có endpoint "like invite"
+        // thì gọi API ở đây.
       },
-      child: Container(
-        width: 34,
-        height: 34,
-        decoration: BoxDecoration(
-          color: Colors.black.withOpacity(0.38),
-          shape: BoxShape.circle,
-        ),
-        child: Icon(
-          left ? Icons.chevron_left : Icons.chevron_right,
-          color: Colors.white,
-          size: 22,
-        ),
+      child: StoryProgressCarousel(
+        controller: _storyController,
+        itemCount: mediaList.length,
+        height: 300,
+        borderRadius: BorderRadius.circular(20),
+        isVideo: (i) => mediaList[i]['type'] == 'video',
+        onIndexChanged: _onPageChanged,
+        itemBuilder: (_, i) {
+          final item = mediaList[i];
+          return item['type'] == 'video'
+              ? _buildVideoSlide(item['url'] as String, i)
+              : _buildImageSlide(item['url'] as String, index: i);
+        },
       ),
     );
   }
 
-  Widget _buildImageSlide(String url) {
-    return CachedNetworkImage(
+  Widget _buildImageSlide(String url, {int index = 0}) {
+    final img = CachedNetworkImage(
       imageUrl: url,
       fit: BoxFit.cover,
       width: double.infinity,
@@ -1147,6 +1064,16 @@ class _ProductDetailPageState extends State<ProductDetailPage>
             child: Icon(Icons.broken_image, color: Colors.white38, size: 40)),
       ),
     );
+
+    // Ảnh đầu tiên dùng Hero để bay mượt từ ShopPage sang đây
+    // (nhớ dùng CÙNG tag ở widget ảnh trong list của ShopPage).
+    if (index == 0) {
+      return Hero(
+        tag: 'product-image-${widget.product["id"]}',
+        child: img,
+      );
+    }
+    return img;
   }
 
   Widget _buildVideoSlide(String url, int index) {
@@ -3096,3 +3023,427 @@ class _InfoRow extends StatelessWidget {
     ),
   );
 }
+
+// =============================================================================
+// STORY PROGRESS CAROUSEL — carousel auto-play kiểu story (thay dot indicator
+// bằng progress bar tự chạy, tap trái/phải để lùi/tiến). Ảnh tự auto-advance,
+// video giữ nguyên hành vi cũ (không auto-advance, bạn tự vuốt).
+// =============================================================================
+
+class StoryProgressController {
+  _StoryProgressCarouselState? _state;
+
+  void _attach(_StoryProgressCarouselState state) => _state = state;
+
+  /// Gọi khi muốn ép carousel nhảy sang slide kế tiếp theo cách thủ công
+  /// (ví dụ nếu sau này bạn muốn video tự next khi phát xong).
+  void next() => _state?._goToNext();
+
+  void previous() => _state?._goToPrevious();
+
+  void pause() => _state?._pause();
+
+  void resume() => _state?._resume();
+}
+
+class StoryProgressCarousel extends StatefulWidget {
+  final int itemCount;
+  final IndexedWidgetBuilder itemBuilder;
+  final bool Function(int index) isVideo;
+  final Duration imageDuration;
+  final ValueChanged<int>? onIndexChanged;
+  final StoryProgressController? controller;
+  final double height;
+  final BorderRadius borderRadius;
+
+  const StoryProgressCarousel({
+    super.key,
+    required this.itemCount,
+    required this.itemBuilder,
+    required this.isVideo,
+    this.imageDuration = const Duration(seconds: 5),
+    this.onIndexChanged,
+    this.controller,
+    this.height = 300,
+    this.borderRadius = const BorderRadius.all(Radius.circular(20)),
+  });
+
+  @override
+  State<StoryProgressCarousel> createState() => _StoryProgressCarouselState();
+}
+
+class _StoryProgressCarouselState extends State<StoryProgressCarousel>
+    with SingleTickerProviderStateMixin {
+  late final PageController _pageController;
+  late final AnimationController _progressController;
+  int _index = 0;
+  bool _paused = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _pageController = PageController();
+    _progressController = AnimationController(vsync: this);
+    widget.controller?._attach(this);
+    _startCurrent();
+  }
+
+  @override
+  void didUpdateWidget(covariant StoryProgressCarousel oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.controller != widget.controller) {
+      widget.controller?._attach(this);
+    }
+  }
+
+  @override
+  void dispose() {
+    _progressController.dispose();
+    _pageController.dispose();
+    super.dispose();
+  }
+
+  void _startCurrent() {
+    _progressController.stop();
+    _progressController.reset();
+
+    final isVideo = widget.itemCount > 0 && widget.isVideo(_index);
+    if (isVideo) {
+      // Video tự quản lý bằng VideoPlayerController có sẵn của bạn —
+      // progress bar đứng yên, không auto-advance.
+      return;
+    }
+
+    _progressController.duration = widget.imageDuration;
+    _progressController.forward();
+    _progressController.addStatusListener(_onAnimationStatus);
+  }
+
+  void _onAnimationStatus(AnimationStatus status) {
+    if (status == AnimationStatus.completed) {
+      _progressController.removeStatusListener(_onAnimationStatus);
+      _goToNext();
+    }
+  }
+
+  void _goToNext() {
+    if (_index >= widget.itemCount - 1) return;
+    _pageController.nextPage(
+      duration: const Duration(milliseconds: 280),
+      curve: Curves.easeOut,
+    );
+  }
+
+  void _goToPrevious() {
+    if (_index <= 0) return;
+    _pageController.previousPage(
+      duration: const Duration(milliseconds: 280),
+      curve: Curves.easeOut,
+    );
+  }
+
+  void _pause() {
+    _paused = true;
+    _progressController.stop();
+  }
+
+  void _resume() {
+    if (!_paused) return;
+    _paused = false;
+    _progressController.forward();
+  }
+
+  void _onPageChangedInternal(int i) {
+    setState(() => _index = i);
+    widget.onIndexChanged?.call(i);
+    _startCurrent();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (widget.itemCount == 0) return const SizedBox.shrink();
+
+    return ClipRRect(
+      borderRadius: widget.borderRadius,
+      child: SizedBox(
+        height: widget.height,
+        child: Stack(
+          children: [
+            PageView.builder(
+              controller: _pageController,
+              itemCount: widget.itemCount,
+              onPageChanged: _onPageChangedInternal,
+              itemBuilder: widget.itemBuilder,
+            ),
+
+            // ── Tap trái/phải để lùi/tiến (giống story) ─────────────────
+            Positioned.fill(
+              child: Row(
+                children: [
+                  Expanded(
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.translucent,
+                      onTapUp: (_) => _goToPrevious(),
+                      onLongPressStart: (_) => _pause(),
+                      onLongPressEnd: (_) => _resume(),
+                    ),
+                  ),
+                  Expanded(
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.translucent,
+                      onTapUp: (_) => _goToNext(),
+                      onLongPressStart: (_) => _pause(),
+                      onLongPressEnd: (_) => _resume(),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+            // ── Thanh progress kiểu story ────────────────────────────────
+            if (widget.itemCount > 1)
+              Positioned(
+                top: 10,
+                left: 10,
+                right: 10,
+                child: Row(
+                  children: List.generate(widget.itemCount, (i) {
+                    return Expanded(
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 2),
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(3),
+                          child: SizedBox(
+                            height: 3,
+                            child: AnimatedBuilder(
+                              animation: _progressController,
+                              builder: (_, __) {
+                                double value;
+                                if (i < _index) {
+                                  value = 1.0;
+                                } else if (i == _index) {
+                                  value = widget.isVideo(_index)
+                                      ? 0.0
+                                      : _progressController.value;
+                                } else {
+                                  value = 0.0;
+                                }
+                                return LinearProgressIndicator(
+                                  value: value,
+                                  backgroundColor:
+                                  Colors.white.withOpacity(0.3),
+                                  valueColor: const AlwaysStoppedAnimation(
+                                      Colors.white),
+                                  minHeight: 3,
+                                );
+                              },
+                            ),
+                          ),
+                        ),
+                      ),
+                    );
+                  }),
+                ),
+              ),
+
+            // ── Gradient đáy giữ nguyên cảm giác cũ ─────────────────────
+            Positioned.fill(
+              child: IgnorePointer(
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: [
+                        Colors.transparent,
+                        Colors.black.withOpacity(0.45),
+                      ],
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// =============================================================================
+// DOUBLE TAP REACTION — double-tap để thả tim, bay lên rồi biến mất
+// =============================================================================
+
+class DoubleTapReaction extends StatefulWidget {
+  final Widget child;
+  final VoidCallback? onDoubleTap;
+  final IconData icon;
+  final Color color;
+
+  const DoubleTapReaction({
+    super.key,
+    required this.child,
+    this.onDoubleTap,
+    this.icon = Icons.favorite,
+    this.color = const Color(0xFFFF4D6D),
+  });
+
+  @override
+  State<DoubleTapReaction> createState() => _DoubleTapReactionState();
+}
+
+class _FloatingHeart {
+  final double dx;
+  final double startOffset;
+  _FloatingHeart({required this.dx, required this.startOffset});
+}
+
+class _DoubleTapReactionState extends State<DoubleTapReaction> {
+  final List<_FloatingHeart> _hearts = [];
+  final _random = Random();
+
+  void _handleDoubleTap(TapDownDetails details, BoxConstraints constraints) {
+    final dxRatio =
+    (details.localPosition.dx / constraints.maxWidth).clamp(0.15, 0.85);
+    final heart = _FloatingHeart(
+      dx: dxRatio,
+      startOffset: _random.nextDouble() * 20 - 10,
+    );
+    setState(() => _hearts.add(heart));
+
+    Timer(const Duration(milliseconds: 900), () {
+      if (mounted) setState(() => _hearts.remove(heart));
+    });
+
+    widget.onDoubleTap?.call();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        return GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onDoubleTapDown: (d) => _handleDoubleTap(d, constraints),
+          onDoubleTap: () {}, // bắt buộc để onDoubleTapDown hoạt động
+          child: Stack(
+            clipBehavior: Clip.none,
+            children: [
+              widget.child,
+              ..._hearts.map((h) => _AnimatedHeart(
+                dxRatio: h.dx,
+                xJitter: h.startOffset,
+                icon: widget.icon,
+                color: widget.color,
+              )),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _AnimatedHeart extends StatefulWidget {
+  final double dxRatio;
+  final double xJitter;
+  final IconData icon;
+  final Color color;
+
+  const _AnimatedHeart({
+    required this.dxRatio,
+    required this.xJitter,
+    required this.icon,
+    required this.color,
+  });
+
+  @override
+  State<_AnimatedHeart> createState() => _AnimatedHeartState();
+}
+
+class _AnimatedHeartState extends State<_AnimatedHeart>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl;
+  late final Animation<double> _rise;
+  late final Animation<double> _fade;
+  late final Animation<double> _scale;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 850),
+    )..forward();
+
+    _rise = Tween<double>(begin: 0, end: -110)
+        .animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeOut));
+    _fade = Tween<double>(begin: 1, end: 0).animate(
+        CurvedAnimation(parent: _ctrl, curve: const Interval(0.5, 1.0)));
+    _scale = TweenSequence([
+      TweenSequenceItem(tween: Tween(begin: 0.4, end: 1.3), weight: 40),
+      TweenSequenceItem(tween: Tween(begin: 1.3, end: 1.0), weight: 60),
+    ]).animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeOut));
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _ctrl,
+      builder: (_, __) {
+        return Positioned.fill(
+          child: FractionallySizedBox(
+            widthFactor: 1,
+            heightFactor: 1,
+            child: Align(
+              alignment: Alignment(widget.dxRatio * 2 - 1, 0.3),
+              child: Transform.translate(
+                offset: Offset(widget.xJitter, _rise.value),
+                child: Opacity(
+                  opacity: _fade.value,
+                  child: Transform.scale(
+                    scale: _scale.value,
+                    child: Icon(widget.icon, color: widget.color, size: 64),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+// =============================================================================
+// HERO PRODUCT IMAGE — dùng bên ShopPage (file khác) để khớp Hero tag
+// với ảnh đầu tiên trong carousel ở trên.
+//
+// Trong ShopPage, chỗ hiển thị ảnh sản phẩm trong list, thay:
+//
+//   CachedNetworkImage(imageUrl: product["images"][0]["src"], width: 80, height: 80, ...)
+//
+// bằng:
+//
+//   Hero(
+//     tag: 'product-image-${product["id"]}',
+//     child: ClipRRect(
+//       borderRadius: BorderRadius.circular(12),
+//       child: CachedNetworkImage(
+//         imageUrl: product["images"][0]["src"],
+//         width: 80,
+//         height: 80,
+//         fit: BoxFit.cover,
+//       ),
+//     ),
+//   )
+//
+// Tag PHẢI giống hệt tag dùng ở _buildImageSlide() phía trên
+// ('product-image-${widget.product["id"]}').
+// =============================================================================

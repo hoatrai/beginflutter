@@ -9,6 +9,7 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 
 import 'helpers/lifecycle_tracker.dart';
 import 'services/global_call_service.dart';
+import 'services/presence_service.dart';
 import 'app_globals.dart';
 import 'helpers/storage_helper.dart';
 import 'pages/profile_page.dart';
@@ -326,7 +327,39 @@ Future<void> setupFirebaseMessaging() async {
   }
 }
 
-// ---------------- APP ROOT ----------------
+// ---------------- CUSTOM SLIDE TRANSITION (né lỗi CupertinoPageTransitionsBuilder) ----------------
+// Transition trượt ngang đơn thuần, KHÔNG fade/scale -> tránh hẳn 1 frame
+// bị "chớp trắng" do compositing opacity giữa 2 route lúc chuyển trang.
+class _NoFlashPageTransitionsBuilder extends PageTransitionsBuilder {
+  const _NoFlashPageTransitionsBuilder();
+
+  @override
+  Widget buildTransitions<T>(
+      PageRoute<T> route,
+      BuildContext context,
+      Animation<double> animation,
+      Animation<double> secondaryAnimation,
+      Widget child,
+      ) {
+    final slideIn = Tween<Offset>(
+      begin: const Offset(1.0, 0.0),
+      end: Offset.zero,
+    ).animate(CurvedAnimation(parent: animation, curve: Curves.easeOutCubic));
+
+    final slideOut = Tween<Offset>(
+      begin: Offset.zero,
+      end: const Offset(-0.3, 0.0),
+    ).animate(CurvedAnimation(parent: secondaryAnimation, curve: Curves.easeOutCubic));
+
+    return SlideTransition(
+      position: slideOut,
+      child: SlideTransition(
+        position: slideIn,
+        child: child,
+      ),
+    );
+  }
+}
 
 class CryptoApp extends StatelessWidget {
   final Widget initialPage;
@@ -337,6 +370,13 @@ class CryptoApp extends StatelessWidget {
     return AppLifecycleTracker(
       onStateChanged: (state) {
         debugPrint("🔥 APP STATE => $state");
+        // Không disconnect socket khi vào background — chỉ đổi trạng thái
+        // để user khác thấy "away" thay vì mất hẳn khỏi bản đồ.
+        if (state == "FOREGROUND") {
+          PresenceService.instance.setAppStatus("online");
+        } else if (state == "BACKGROUND") {
+          PresenceService.instance.setAppStatus("background");
+        }
       },
       child: MaterialApp(
         navigatorKey: navigatorKey,
@@ -344,7 +384,13 @@ class CryptoApp extends StatelessWidget {
         debugShowCheckedModeBanner: false,
         theme: ThemeData(
           primarySwatch: Colors.deepPurple,
-          scaffoldBackgroundColor: Colors.grey[100],
+          scaffoldBackgroundColor: const Color(0xFFF4F6FB),
+          pageTransitionsTheme: const PageTransitionsTheme(
+            builders: {
+              TargetPlatform.android: _NoFlashPageTransitionsBuilder(),
+              TargetPlatform.iOS: _NoFlashPageTransitionsBuilder(),
+            },
+          ),
         ),
         home: initialPage,
       ),
@@ -429,6 +475,15 @@ class _MainPageState extends State<MainPage>
       _loading = false;
       _pageCache[_selectedIndex] = _pageFor(_selectedIndex);
     });
+
+    // 🌍 Bật presence toàn app ngay khi biết userId — sống suốt phiên app,
+    // không phụ thuộc user có đang mở tab "Bản đồ" hay không.
+    if (userId != 0) {
+      PresenceService.instance.start(
+        userId: userId,
+        username: userData['display_name'] ?? userData['slug'] ?? 'Khách',
+      );
+    }
   }
 
   Widget _pageFor(int index) {
@@ -476,17 +531,22 @@ class _MainPageState extends State<MainPage>
 
   Widget _navItem(IconData icon, String label, int index) {
     final isSelected = _selectedIndex == index;
+    // 👇 SỬA: Colors.grey[700] quá tối, gần như "chìm" vào nền navy đậm
+    // (scaffoldBackgroundColor: 0xFF0D1B2A) khi KHÔNG được chọn.
+    // Đổi sang màu sáng (trắng ngả xám) để đủ tương phản trên nền tối.
+    final unselectedColor = Colors.white.withOpacity(0.55);
+
     return GestureDetector(
       onTap: () => _onItemTapped(index),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon, color: isSelected ? accentOrange : Colors.grey[700]),
+          Icon(icon, color: isSelected ? accentOrange : unselectedColor),
           const SizedBox(height: 2),
           Text(
             label,
             style: TextStyle(
-              color: isSelected ? accentOrange : Colors.grey[700],
+              color: isSelected ? accentOrange : unselectedColor,
               fontSize: 12,
               fontWeight: FontWeight.w600,
             ),

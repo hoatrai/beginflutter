@@ -76,6 +76,7 @@ class _MapPageState extends State<MapPage>
   String jwtToken = "";
 
   bool _boundsFitted = false;
+  bool _isConnectingSocket = false; // 👈 THÊM: chặn gọi connect chồng chéo
 
   // =====> Đặt parseDouble ở đây
   double parseDouble(dynamic v) {
@@ -104,6 +105,13 @@ class _MapPageState extends State<MapPage>
       Geolocator.getServiceStatusStream().listen((status) {
         if (status == ServiceStatus.enabled) {
           print('✅ GPS vừa được bật');
+          // 👇 THÊM: nếu đang kết nối/đã có socket sống rồi thì bỏ qua,
+          // tránh bắn _initTokenAndLocation() nhiều lần liên tiếp khi
+          // ServiceStatusStream phát sự kiện "enabled" lặp lại (hay gặp trên Android)
+          if (_isConnectingSocket || _socket != null) {
+            debugPrint("⚠️ GPS status bắn lại nhưng đã có kết nối -> bỏ qua");
+            return;
+          }
           _initTokenAndLocation(); // gọi lại để load map ngay
         } else {
           print('⚠️ GPS bị tắt');
@@ -643,13 +651,27 @@ out center tags;
   Future<void> _disconnectSocket() async {
     try {
       _onlineChannel?.leave();
+      // 👇 THÊM: đợi 1 chút để lệnh leave kịp gửi lên server trước khi đóng
+      // socket -- tránh trường hợp server chưa kịp untrack presence thì
+      // socket mới đã join lại, gây ra 2 metas trùng key như log đã thấy.
+      await Future.delayed(const Duration(milliseconds: 300));
       _socket?.close();
     } catch (_) {}
     _onlineChannel = null;
     _socket = null;
+    _isConnectingSocket = false; // 👈 THÊM: reset cờ khi ngắt kết nối
   }
 
   Future<void> _connectPhoenix() async {
+    // 👇 THÊM: nếu đang có 1 kết nối sống hoặc đang trong quá trình connect,
+    // KHÔNG mở thêm kết nối mới cho cùng user -> đây là nguyên nhân sinh ra
+    // 2 metas trùng key trên server (log "phx_ref" + "phx_ref_prev" cùng lúc).
+    if (_isConnectingSocket || _socket != null) {
+      debugPrint("⚠️ Đã có socket đang sống/đang kết nối, bỏ qua connect lần nữa");
+      return;
+    }
+    _isConnectingSocket = true;
+
     try {
       // Lấy vị trí hiện tại nếu null
       if (_currentPosition == null) {
@@ -721,6 +743,8 @@ out center tags;
       }
     } catch (e) {
       debugPrint("❌ ConnectPhoenix error: $e");
+    } finally {
+      _isConnectingSocket = false; // 👈 THÊM: luôn mở khoá dù thành công hay lỗi
     }
   }
 
@@ -796,6 +820,7 @@ out center tags;
         'longitude': parseDouble(metaInner['longitude']),
         'status': metaInner['status'] ?? "online",   // 👈 thêm
         'online_at': metaInner['online_at'],
+        'phx_ref': metaInner['phx_ref'], // 👈 THÊM: cần để so khớp khi leave
       };
     });
 
@@ -830,15 +855,30 @@ out center tags;
         'longitude': lng,
         'status': meta['status'] ?? "online",        // 👈 thêm
         'online_at': meta['online_at'],
+        'phx_ref': meta['phx_ref'], // 👈 THÊM: lưu ref của kết nối vừa join
       };
       debugPrint("📡 JOIN -> $key, $username, lat=$lat, lng=$lng");
       changed = true;
     });
 
-    leaves.forEach((key, _) {
-      presenceUsers.remove(key.toString());
-      debugPrint("📴 LEAVE -> $key");
-      changed = true;
+    // 👇 SỬA: chỉ xoá marker nếu ref vừa "leave" TRÙNG với ref đang hiển thị.
+    // Nếu 1 user có 2 kết nối (2 metas) cùng lúc và 1 trong 2 rớt, Phoenix sẽ
+    // gửi leave chỉ với đúng 1 ref đó -- không được xoá cả key nếu ref khác vẫn còn sống.
+    leaves.forEach((key, value) {
+      final leftRefs = ((value['metas'] as List?) ?? [])
+          .map((m) => m['phx_ref'])
+          .toSet();
+
+      final current = presenceUsers[key.toString()];
+      if (current == null) return;
+
+      if (leftRefs.contains(current['phx_ref'])) {
+        presenceUsers.remove(key.toString());
+        debugPrint("📴 LEAVE -> $key (ref khớp, xoá marker)");
+        changed = true;
+      } else {
+        debugPrint("📴 LEAVE -> $key nhưng ref không khớp (còn kết nối khác sống) -> GIỮ marker");
+      }
     });
 
     if (changed) {
@@ -1020,15 +1060,15 @@ out center tags;
 
       switch (status) {
         case "background":
-          statusColor = Colors.orange;
+          statusColor = const Color(0xFF6366F1); // indigo - "Away"
           statusText = "Away";
           break;
         case "offline":
-          statusColor = Colors.red;
+          statusColor = const Color(0xFF64748B); // blue-grey - "Offline"
           statusText = "Offline";
           break;
         default:
-          statusColor = Colors.green;
+          statusColor = const Color(0xFF14B8A6); // teal - "Online"
           statusText = "Online";
       }
 
@@ -1431,7 +1471,7 @@ out center tags;
             mapController: _mapController,
             options: MapOptions(center: _currentPosition!, zoom: 14, minZoom: 3, maxZoom: 18),
             children: [
-             /* TileLayer(
+              /* TileLayer(
                 urlTemplate: "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
                 subdomains: const ['a', 'b', 'c'],
                 retinaMode: false, // ✅ thêm dòng này
@@ -2195,6 +2235,3 @@ class _GroupMarkerState extends State<_GroupMarker>
     );
   }
 }
-
-
-

@@ -77,7 +77,7 @@ class _NotificationPageState extends State<NotificationPage> {
 
     return Scaffold(
       extendBody: true,
-      backgroundColor: Colors.transparent,
+      backgroundColor: const Color(0xFF1E3A8A), // thay vì Colors.transparent
       body: Container(
         decoration: BoxDecoration(
           gradient: LinearGradient(

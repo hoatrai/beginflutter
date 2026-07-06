@@ -3307,24 +3307,25 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
                                   children: [
                                     Column(
                                       children: [
-                                        ClipRRect(
+                                        product["images"] != null &&
+                                            product["images"] is List &&
+                                            product["images"].isNotEmpty &&
+                                            (product["images"][0]["src"] ?? '').isNotEmpty
+                                            ? HeroProductImage(
+                                          tag: 'product-image-${product["id"]}',
+                                          imageUrl: product["images"][0]["src"],
+                                          width: 80,
+                                          height: 80,
                                           borderRadius: BorderRadius.circular(12),
-                                          child: product["images"] != null &&
-                                              product["images"] is List &&
-                                              product["images"].isNotEmpty &&
-                                              (product["images"][0]["src"] ?? '').isNotEmpty
-                                              ? CachedNetworkImage(
-                                            imageUrl: product["images"][0]["src"],
-                                            width: 80,
-                                            height: 80,
-                                            fit: BoxFit.cover,
-                                          )
-                                              : Container(
-                                            width: 80,
-                                            height: 80,
+                                        )
+                                            : Container(
+                                          width: 80,
+                                          height: 80,
+                                          decoration: BoxDecoration(
                                             color: Colors.grey[300]?.withOpacity(0.3),
-                                            child: const Icon(Icons.image, size: 40),
+                                            borderRadius: BorderRadius.circular(12),
                                           ),
+                                          child: const Icon(Icons.image, size: 40),
                                         ),
                                         const SizedBox(height: 6),
                                         Builder(
@@ -4228,4 +4229,62 @@ Widget _buildSkeletonItem() {
       ),
     ),
   );
+}
+
+// =============================================================================
+// DÁN KHỐI NÀY VÀO CUỐI FILE shop_page.dart CỦA BẠN
+// Chỉ cần đúng 1 class này thôi, không cần StoryProgressCarousel / DoubleTapReaction
+// (2 cái đó chỉ dùng bên ProductDetailPage).
+// =============================================================================
+
+// Dùng CÙNG tag ở cả 2 nơi:
+//  - Widget ảnh trong item của ShopPage (danh sách)     -> 'product-image-${product["id"]}'
+//  - Widget ảnh đầu tiên trong carousel của ProductDetailPage (cùng tag để Hero khớp)
+
+class HeroProductImage extends StatelessWidget {
+  final String tag;
+  final String imageUrl;
+  final double? width;
+  final double? height;
+  final BoxFit fit;
+  final BorderRadius borderRadius;
+
+  const HeroProductImage({
+    super.key,
+    required this.tag,
+    required this.imageUrl,
+    this.width,
+    this.height,
+    this.fit = BoxFit.cover,
+    this.borderRadius = BorderRadius.zero,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Hero(
+      tag: tag,
+      flightShuttleBuilder: (context, animation, direction, fromCtx, toCtx) {
+        return ClipRRect(
+          borderRadius: borderRadius,
+          child: (direction == HeroFlightDirection.push ? toCtx : fromCtx)
+              .widget,
+        );
+      },
+      child: ClipRRect(
+        borderRadius: borderRadius,
+        child: CachedNetworkImage(
+          imageUrl: imageUrl,
+          width: width,
+          height: height,
+          fit: fit,
+          errorWidget: (_, __, ___) => Container(
+            width: width,
+            height: height,
+            color: Colors.black26,
+            child: const Icon(Icons.broken_image, color: Colors.white38),
+          ),
+        ),
+      ),
+    );
+  }
 }
