@@ -21,6 +21,7 @@ class ChatListPage extends StatefulWidget {
 class _ChatListPageState extends State<ChatListPage> {
   List<Map<String, dynamic>> chatList = [];
   bool loading = true;
+  bool hasError = false; // ✅ theo dõi trạng thái lỗi mạng/API
 
   // 🎨 Màu chủ đạo đồng bộ với ProfilePage
   final Color primaryBlue = const Color(0xFF1E3A8A);
@@ -31,34 +32,62 @@ class _ChatListPageState extends State<ChatListPage> {
   void initState() {
     super.initState();
     _fetchChatList();
-    // chỉ dùng test/debug
-    //resetAllJoins();
   }
-  /*Future<void> resetAllJoins() async {
-    const storage = FlutterSecureStorage();
-    final all = await storage.readAll(); // ✅ lấy tất cả key
-    for (var key in all.keys) {
-      if (key.startsWith("joined_")) {
-        await StorageHelper.delete(key); // dùng StorageHelper để xóa
-        debugPrint("Deleted $key");
-      }
+
+  /// ✅ Format thời gian: hôm nay -> giờ:phút, khác ngày -> dd/MM
+  String _formatUpdatedAt(String rawDate) {
+    if (rawDate.isEmpty) return "";
+    try {
+      final date = DateTime.parse(rawDate);
+      final now = DateTime.now();
+      final isToday = date.year == now.year &&
+          date.month == now.month &&
+          date.day == now.day;
+      return isToday
+          ? DateFormat('HH:mm').format(date)
+          : DateFormat('dd/MM').format(date);
+    } catch (_) {
+      // Nếu server trả định dạng không parse được thì hiển thị nguyên văn
+      return rawDate;
     }
-    debugPrint("✅ Reset tất cả join done");
-  }*/
+  }
 
   Future<void> _fetchChatList() async {
-    setState(() => loading = true);
+    if (!mounted) return;
+    setState(() {
+      loading = true;
+      hasError = false;
+    });
 
     try {
       final userId = await StorageHelper.read("user_id");
-      if (userId == null) return;
+      if (userId == null) {
+        if (!mounted) return;
+        setState(() {
+          loading = false;
+          hasError = true;
+        });
+        return;
+      }
+
+      final parsedUserId = int.tryParse(userId);
+      if (parsedUserId == null) {
+        if (!mounted) return;
+        setState(() {
+          loading = false;
+          hasError = true;
+        });
+        return;
+      }
 
       final url = Uri.parse("${AppConfig.webDomain}/wp-json/spiritwebs/v1/get-chat-list");
       final response = await http.post(
         url,
         headers: {"Content-Type": "application/json"},
-        body: jsonEncode({"user_id": int.parse(userId)}),
+        body: jsonEncode({"user_id": parsedUserId}),
       );
+
+      if (!mounted) return;
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
@@ -74,17 +103,32 @@ class _ChatListPageState extends State<ChatListPage> {
             }
           }
 
-          setState(() {
-            chatList = uniqueChats.values.toList();
+          final list = uniqueChats.values.toList();
+
+          // ✅ Sắp xếp theo updated_at giảm dần (mới nhất lên đầu)
+          list.sort((a, b) {
+            final aDate = DateTime.tryParse(a["updated_at"]?.toString() ?? "");
+            final bDate = DateTime.tryParse(b["updated_at"]?.toString() ?? "");
+            if (aDate == null || bDate == null) return 0;
+            return bDate.compareTo(aDate);
           });
+
+          setState(() {
+            chatList = list;
+            hasError = false;
+          });
+        } else {
+          setState(() => hasError = true);
         }
       } else {
         debugPrint("❌ Lỗi load danh sách chat: ${response.statusCode}");
+        setState(() => hasError = true);
       }
     } catch (e) {
       debugPrint("❌ Lỗi khi tải danh sách chat: $e");
+      if (mounted) setState(() => hasError = true);
     } finally {
-      setState(() => loading = false);
+      if (mounted) setState(() => loading = false);
     }
   }
 
@@ -93,8 +137,9 @@ class _ChatListPageState extends State<ChatListPage> {
     final targetName = chat["target_name"] ?? "Ẩn danh 2";
     final targetId = chat["target_id"]?.toString() ?? "0";
     final lastMessage = chat["last_message"] ?? "";
-    final updatedAt = chat["updated_at"] ?? "";
-    final targetAvatar = chat["avatar_url"] ?? ""; // ✅ thêm dòng này
+    final updatedAt = chat["updated_at"]?.toString() ?? "";
+    final targetAvatar = chat["avatar_url"] ?? "";
+    final unreadCount = int.tryParse(chat["unread_count"]?.toString() ?? "") ?? 0; // ✅ badge chưa đọc (nếu API có trả)
 
     return GestureDetector(
       onTap: () async {
@@ -102,15 +147,18 @@ class _ChatListPageState extends State<ChatListPage> {
         final userData = userDataStr != null ? jsonDecode(userDataStr) : {};
         final myName = userData["username"] ?? "Ẩn danh";
         final myId = await StorageHelper.read("user_id") ?? "0";
+        final targetIdInt = int.tryParse(targetId) ?? 0;
+        final myIdInt = int.tryParse(myId) ?? 0;
 
+        if (!mounted) return;
         Navigator.push(
           context,
           MaterialPageRoute(
             builder: (context) => ChatPage(
               username: myName,
-              userId: int.parse(myId),
+              userId: myIdInt,
               targetUser: targetName,
-              targetId: int.parse(targetId),
+              targetId: targetIdInt,
               targetAvatar: targetAvatar,
               serverUrl: AppConfig.websocketUrl,
             ),
@@ -143,10 +191,16 @@ class _ChatListPageState extends State<ChatListPage> {
             CircleAvatar(
               radius: 26,
               backgroundColor: accentOrange,
-              backgroundImage: chat["avatar_url"] != null && chat["avatar_url"].toString().isNotEmpty
-                  ? NetworkImage(chat["avatar_url"])
+              backgroundImage: targetAvatar.toString().isNotEmpty
+                  ? NetworkImage(targetAvatar) as ImageProvider
                   : null,
-              child: (chat["avatar_url"] == null || chat["avatar_url"].toString().isEmpty)
+              onBackgroundImageError: targetAvatar.toString().isNotEmpty
+                  ? (_, __) {
+                // ✅ tránh crash / icon vỡ khi URL ảnh lỗi
+                debugPrint("⚠️ Lỗi tải avatar: $targetAvatar");
+              }
+                  : null,
+              child: targetAvatar.toString().isEmpty
                   ? Text(
                 targetName.isNotEmpty ? targetName[0].toUpperCase() : "?",
                 style: const TextStyle(
@@ -182,12 +236,30 @@ class _ChatListPageState extends State<ChatListPage> {
             Column(
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
-                const Icon(Icons.access_time, color: Colors.white70, size: 14),
-                const SizedBox(height: 4),
                 Text(
-                  updatedAt,
+                  _formatUpdatedAt(updatedAt),
                   style: const TextStyle(color: Colors.white60, fontSize: 12),
                 ),
+                const SizedBox(height: 6),
+                // ✅ Badge số tin nhắn chưa đọc
+                if (unreadCount > 0)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: accentOrange,
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Text(
+                      unreadCount > 99 ? "99+" : "$unreadCount",
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  )
+                else
+                  const Icon(Icons.access_time, color: Colors.white70, size: 14),
               ],
             ),
           ],
@@ -215,7 +287,6 @@ class _ChatListPageState extends State<ChatListPage> {
             ),
             child: Row(
               children: [
-                // Avatar fake
                 Container(
                   width: 52,
                   height: 52,
@@ -224,9 +295,7 @@ class _ChatListPageState extends State<ChatListPage> {
                     shape: BoxShape.circle,
                   ),
                 ),
-
                 const SizedBox(width: 14),
-
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -259,11 +328,37 @@ class _ChatListPageState extends State<ChatListPage> {
     );
   }
 
+  // ✅ Trạng thái lỗi mạng/API — có nút thử lại
+  Widget _buildErrorState() {
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.wifi_off_rounded, color: Colors.white70, size: 42),
+          const SizedBox(height: 12),
+          const Text(
+            "Không thể tải danh sách trò chuyện",
+            style: TextStyle(color: Colors.white70, fontSize: 16),
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 16),
+          ElevatedButton.icon(
+            onPressed: _fetchChatList,
+            style: ElevatedButton.styleFrom(
+              backgroundColor: accentOrange,
+              foregroundColor: Colors.white,
+            ),
+            icon: const Icon(Icons.refresh),
+            label: const Text("Thử lại"),
+          ),
+        ],
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      // Nền gradient đồng bộ với ProfilePage
       body: Container(
         decoration: BoxDecoration(
           gradient: LinearGradient(
@@ -275,7 +370,6 @@ class _ChatListPageState extends State<ChatListPage> {
         child: SafeArea(
           child: Column(
             children: [
-              // AppBar custom
               Padding(
                 padding: const EdgeInsets.symmetric(vertical: 16),
                 child: Text(
@@ -290,6 +384,8 @@ class _ChatListPageState extends State<ChatListPage> {
               Expanded(
                 child: loading
                     ? _buildSkeleton()
+                    : hasError
+                    ? _buildErrorState()
                     : chatList.isEmpty
                     ? const Center(
                   child: Text(
@@ -313,8 +409,6 @@ class _ChatListPageState extends State<ChatListPage> {
           ),
         ),
       ),
-
-      // FAB map bạn bè quanh đây
       floatingActionButton: FloatingActionButton.extended(
         backgroundColor: accentOrange,
         icon: const Icon(Icons.map, color: Colors.white),
@@ -327,6 +421,7 @@ class _ChatListPageState extends State<ChatListPage> {
           final userIdStr = await StorageHelper.read("user_id") ?? "0";
           final userIdInt = int.tryParse(userIdStr) ?? 0;
           final email = await StorageHelper.read("user_email") ?? "";
+          if (!mounted) return;
           Navigator.push(
             context,
             MaterialPageRoute(
@@ -339,65 +434,6 @@ class _ChatListPageState extends State<ChatListPage> {
           );
         },
       ),
-    );
-  }
-}
-class Shimmer extends StatefulWidget {
-  final Widget child;
-
-  const Shimmer({
-    super.key,
-    required this.child,
-  });
-
-  @override
-  State<Shimmer> createState() => _ShimmerState();
-}
-
-class _ShimmerState extends State<Shimmer>
-    with SingleTickerProviderStateMixin {
-
-  late final AnimationController _controller;
-
-  @override
-  void initState() {
-    super.initState();
-
-    _controller = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1100),
-    )..repeat();
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: _controller,
-      child: widget.child,
-      builder: (context, child) {
-        return ShaderMask(
-          blendMode: BlendMode.srcATop,
-          shaderCallback: (bounds) {
-            return LinearGradient(
-              begin: Alignment(-2 + 4 * _controller.value, 0),
-              end: Alignment(-1 + 4 * _controller.value, 0),
-              colors: const [
-                Color(0x00FFFFFF),
-                Color(0x66FFFFFF),
-                Color(0x00FFFFFF),
-              ],
-              stops: const [0.3, 0.5, 0.7],
-            ).createShader(bounds);
-          },
-          child: child,
-        );
-      },
     );
   }
 }

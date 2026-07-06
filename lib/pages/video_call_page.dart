@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
+import '../services/global_call_service.dart';
 import 'webrtc_signal_bus.dart';
 
 /// ⚠️ FIX QUAN TRỌNG (so với bản cũ):
@@ -30,7 +31,7 @@ class VideoCallPage extends StatefulWidget {
   /// _OutgoingCallScreen).
   final String callType;
 
-  /// Chỉ dùng cho UI màn hình gọi thoại (avatar + tên đối phương).
+  /// Chỉ dùng cho UI (avatar + tên đối phương).
   /// Có thể null nếu ChatPage chưa truyền vào — UI sẽ fallback icon person.
   final String? targetName;
   final String? targetAvatar;
@@ -61,8 +62,10 @@ class _VideoCallPageState extends State<VideoCallPage> {
 
   bool get _isVideoCall => widget.callType != "voice";
 
-  // ---- chỉ dùng cho UI gọi thoại ----
+  // ---- trạng thái điều khiển dùng chung cho cả voice & video ----
   bool _muted = false;
+  bool _speakerOn = true;
+  bool _switchingCamera = false;
   bool _remoteConnected = false;
   Timer? _durationTimer;
   Duration _callDuration = Duration.zero;
@@ -128,10 +131,34 @@ class _VideoCallPageState extends State<VideoCallPage> {
     });
   }
 
+  Future<void> _toggleSpeaker() async {
+    setState(() => _speakerOn = !_speakerOn);
+    try {
+      await Helper.setSpeakerphoneOn(_speakerOn);
+    } catch (e) {
+      debugPrint("toggleSpeaker error: $e");
+    }
+  }
+
+  Future<void> _switchCamera() async {
+    if (localStream == null || _switchingCamera) return;
+    final videoTracks = localStream!.getVideoTracks();
+    if (videoTracks.isEmpty) return;
+    setState(() => _switchingCamera = true);
+    try {
+      await Helper.switchCamera(videoTracks.first);
+    } catch (e) {
+      debugPrint("switchCamera error: $e");
+    } finally {
+      if (mounted) setState(() => _switchingCamera = false);
+    }
+  }
+
   String _formatDuration(Duration d) {
+    final h = d.inHours;
     final m = d.inMinutes.remainder(60).toString().padLeft(2, '0');
     final s = d.inSeconds.remainder(60).toString().padLeft(2, '0');
-    return "$m:$s";
+    return h > 0 ? "$h:$m:$s" : "$m:$s";
   }
 
   // ---------------- INIT WEBRTC ----------------
@@ -183,6 +210,16 @@ class _VideoCallPageState extends State<VideoCallPage> {
       local.srcObject = localStream;
     }
 
+    // 🔊 Mặc định bật loa ngoài cho cuộc gọi video (voice call thì để
+    // mặc định earpiece cho tự nhiên như gọi điện thoại thường).
+    if (_isVideoCall) {
+      try {
+        await Helper.setSpeakerphoneOn(true);
+      } catch (_) {}
+    } else {
+      _speakerOn = false;
+    }
+
     if (!mounted) return;
     setState(() => initialized = true);
 
@@ -214,6 +251,13 @@ class _VideoCallPageState extends State<VideoCallPage> {
       // treo trên màn hình chờ vô thời hạn. Cần server có handle_in cho
       // "call_end" và broadcast_from! lại cho phía kia.
       WebRTCSignalBus.instance.send("call_end", {});
+
+      // ✅ Đóng luôn kênh WebSocket riêng của GlobalCallService (nếu cuộc
+      // gọi này đến từ FCM, không phải từ ChatPage). Nếu không gọi dòng
+      // này, kênh đó sẽ treo mở mãi vì GlobalCallService chỉ tự đóng khi
+      // NHẬN được call_end/call_reject từ đối phương — còn khi CHÍNH
+      // MÌNH chủ động cúp máy thì không có ai kích hoạt việc dọn dẹp đó.
+      GlobalCallService.instance.closeActiveCallChannel();
     }
     Navigator.of(context).pop();
   }
@@ -247,54 +291,207 @@ class _VideoCallPageState extends State<VideoCallPage> {
     return _buildVideoUI();
   }
 
+  // =====================================================================
+  // VIDEO CALL UI
+  // =====================================================================
   Widget _buildVideoUI() {
+    final hasAvatar = widget.targetAvatar != null && widget.targetAvatar!.isNotEmpty;
+
     return Scaffold(
       backgroundColor: Colors.black,
       body: Stack(
         children: [
+          // ---- Nền: remote video, hoặc avatar mờ nếu chưa kết nối ----
           Positioned.fill(
-            child: RTCVideoView(
+            child: _remoteConnected
+                ? RTCVideoView(
               remote,
               objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
-            ),
+            )
+                : _buildConnectingBackground(hasAvatar),
           ),
-          Positioned(
-            right: 12,
-            top: 40,
-            width: 120,
-            height: 160,
-            child: Container(
-              decoration: BoxDecoration(
-                border: Border.all(color: Colors.white24),
-                borderRadius: BorderRadius.circular(8),
+
+          // ---- Overlay tối nhẹ phía trên để chữ/nút luôn dễ đọc ----
+          Positioned.fill(
+            child: IgnorePointer(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      Colors.black.withOpacity(0.55),
+                      Colors.transparent,
+                      Colors.transparent,
+                      Colors.black.withOpacity(0.65),
+                    ],
+                    stops: const [0.0, 0.2, 0.7, 1.0],
+                  ),
+                ),
               ),
-              child: RTCVideoView(local, mirror: true),
             ),
           ),
+
+          // ---- Thanh trên: tên + trạng thái/thời gian ----
+          Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            child: SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                child: Column(
+                  children: [
+                    Text(
+                      widget.targetName ?? "Người dùng",
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 18,
+                        fontWeight: FontWeight.w600,
+                        shadows: [Shadow(blurRadius: 8, color: Colors.black54)],
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      _remoteConnected
+                          ? _formatDuration(_callDuration)
+                          : "Đang kết nối...",
+                      style: const TextStyle(
+                        color: Colors.white70,
+                        fontSize: 13,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+
+          // ---- Khung preview camera của chính mình ----
+          if (_isVideoCall)
+            Positioned(
+              right: 14,
+              top: 90,
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(14),
+                child: Container(
+                  width: 110,
+                  height: 150,
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: Colors.white24, width: 1.2),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.35),
+                        blurRadius: 10,
+                        offset: const Offset(0, 4),
+                      ),
+                    ],
+                  ),
+                  child: RTCVideoView(
+                    local,
+                    mirror: true,
+                    objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover,
+                  ),
+                ),
+              ),
+            ),
+
+          // ---- Spinner khi đang khởi tạo webrtc (xin quyền, mở camera) ----
           if (!initialized)
             const Center(
               child: CircularProgressIndicator(color: Colors.white),
             ),
+
+          // ---- Thanh điều khiển dưới cùng ----
           Positioned(
-            bottom: 40,
+            bottom: 0,
             left: 0,
             right: 0,
-            child: Center(
-              child: FloatingActionButton(
-                backgroundColor: Colors.red,
-                onPressed: _hangUp,
-                child: const Icon(Icons.call_end),
+            child: SafeArea(
+              top: false,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(vertical: 22),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    _CallIconButton(
+                      icon: _muted ? Icons.mic_off_rounded : Icons.mic_rounded,
+                      active: _muted,
+                      onTap: _toggleMute,
+                    ),
+                    const SizedBox(width: 18),
+                    _CallIconButton(
+                      icon: Icons.cameraswitch_rounded,
+                      active: false,
+                      onTap: _switchCamera,
+                    ),
+                    const SizedBox(width: 18),
+                    // Nút cúp máy — to hơn, nổi bật, ở giữa
+                    GestureDetector(
+                      onTap: _hangUp,
+                      child: Container(
+                        width: 66,
+                        height: 66,
+                        decoration: const BoxDecoration(
+                          color: Colors.redAccent,
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(Icons.call_end_rounded,
+                            color: Colors.white, size: 30),
+                      ),
+                    ),
+                    const SizedBox(width: 18),
+                    _CallIconButton(
+                      icon: _speakerOn
+                          ? Icons.volume_up_rounded
+                          : Icons.volume_down_rounded,
+                      active: _speakerOn,
+                      onTap: _toggleSpeaker,
+                    ),
+                  ],
+                ),
               ),
             ),
-          )
+          ),
         ],
       ),
     );
   }
 
-  /// Màn hình gọi thoại — không có camera nên không có gì để render
-  /// RTCVideoView, thay vào đó hiện avatar + tên + thời gian gọi, đồng bộ
-  /// phong cách tối giản với _OutgoingCallScreen ở chat_page.dart.
+  /// Nền hiển thị khi chưa nhận được remote stream — thay vì màn đen trơ
+  /// trọi kèm 1 spinner giữa màn hình, hiện avatar đối phương phóng to +
+  /// làm mờ, giống UI "đang kết nối" của các app gọi video phổ biến.
+  Widget _buildConnectingBackground(bool hasAvatar) {
+    return Container(
+      color: const Color(0xFF111318),
+      child: hasAvatar
+          ? Stack(
+        fit: StackFit.expand,
+        children: [
+          Image.network(
+            widget.targetAvatar!,
+            fit: BoxFit.cover,
+            errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+          ),
+          BackdropFilter(
+            filter: ColorFilter.mode(
+              Colors.black.withOpacity(0.55),
+              BlendMode.darken,
+            ) as dynamic,
+            child: Container(color: Colors.black.withOpacity(0.35)),
+          ),
+        ],
+      )
+          : const Center(
+        child: Icon(Icons.videocam_rounded, color: Colors.white24, size: 64),
+      ),
+    );
+  }
+
+  // =====================================================================
+  // VOICE CALL UI
+  // =====================================================================
   Widget _buildVoiceUI() {
     final hasAvatar =
         widget.targetAvatar != null && widget.targetAvatar!.isNotEmpty;
@@ -336,22 +533,12 @@ class _VideoCallPageState extends State<VideoCallPage> {
             Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                GestureDetector(
+                _CallIconButton(
+                  icon: _muted ? Icons.mic_off_rounded : Icons.mic_rounded,
+                  active: _muted,
                   onTap: _toggleMute,
-                  child: Container(
-                    width: 56,
-                    height: 56,
-                    decoration: BoxDecoration(
-                      color: _muted ? Colors.white : Colors.white12,
-                      shape: BoxShape.circle,
-                    ),
-                    child: Icon(
-                      _muted ? Icons.mic_off : Icons.mic,
-                      color: _muted ? Colors.black : Colors.white,
-                    ),
-                  ),
                 ),
-                const SizedBox(width: 28),
+                const SizedBox(width: 24),
                 GestureDetector(
                   onTap: _hangUp,
                   child: Container(
@@ -365,10 +552,53 @@ class _VideoCallPageState extends State<VideoCallPage> {
                         color: Colors.white, size: 30),
                   ),
                 ),
+                const SizedBox(width: 24),
+                _CallIconButton(
+                  icon: _speakerOn
+                      ? Icons.volume_up_rounded
+                      : Icons.volume_down_rounded,
+                  active: _speakerOn,
+                  onTap: _toggleSpeaker,
+                ),
               ],
             ),
             const SizedBox(height: 48),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Nút tròn dùng chung cho thanh điều khiển cuộc gọi (mute, đổi camera,
+/// loa ngoài...). `active` = true khi tính năng đang BẬT (ví dụ đang mute)
+/// → tô nền sáng để phân biệt rõ trạng thái đang bật/tắt.
+class _CallIconButton extends StatelessWidget {
+  final IconData icon;
+  final bool active;
+  final VoidCallback onTap;
+
+  const _CallIconButton({
+    required this.icon,
+    required this.active,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: 52,
+        height: 52,
+        decoration: BoxDecoration(
+          color: active ? Colors.white : Colors.white.withOpacity(0.16),
+          shape: BoxShape.circle,
+        ),
+        child: Icon(
+          icon,
+          color: active ? Colors.black87 : Colors.white,
+          size: 24,
         ),
       ),
     );

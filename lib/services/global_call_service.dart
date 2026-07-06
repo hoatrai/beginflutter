@@ -6,18 +6,42 @@ import 'package:flutter/material.dart';
 import 'package:flutter_ringtone_player/flutter_ringtone_player.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
-import '../app_globals.dart'; // navigatorKey, isChatPageOpen
+import '../app_globals.dart'; // navigatorKey, isChatPageOpen, currentChatTargetId
+import '../config/app_config.dart';
 import '../pages/video_call_page.dart';
 import '../pages/webrtc_signal_bus.dart';
 
 /// GlobalCallService — singleton sống suốt vòng đời app.
 ///
-/// Fix so với bản cũ:
-/// 1. _showOverlay dùng addPostFrameCallback → tránh lỗi navigator null
-///    khi app vừa mở từ terminated state.
-/// 2. Retry overlay tối đa 10 lần (mỗi 200ms) nếu navigator chưa sẵn sàng.
+/// ⚠️ FIX QUAN TRỌNG (so với bản cũ):
+/// Bản cũ hủy `_wsSub` ngay trong `onAccept`, TRƯỚC khi mở VideoCallPage.
+/// Vì VideoCallPage/WebRTCSignalBus KHÔNG tự listen() lên channel.stream
+/// (thiết kế của bus là để ChatPage._onData làm việc đó), nên trong luồng
+/// gọi đến từ FCM/GlobalCallService (không có ChatPage nào đang mở), việc
+/// hủy _wsSub khiến KHÔNG CÒN AI lắng nghe channel.stream nữa.
+/// → webrtc_offer/answer/ice của caller gửi tới sau khi accept sẽ bị rơi
+/// mất hoàn toàn → "báo tới, bắt máy được nhưng không có tín hiệu".
+///
+/// Cách sửa: giữ `_wsSub` sống xuyên suốt cuộc gọi (không hủy lúc accept),
+/// chỉ đóng nó khi cuộc gọi thực sự kết thúc (tự cúp máy, hoặc nhận được
+/// call_end/call_reject từ đối phương qua WebRTCSignalBus.onCallEnded).
+///
+/// Fix phụ: `isChatPageOpen` trước đây là cờ boolean chung, khiến cuộc gọi
+/// đến bị bỏ qua hoàn toàn nếu người dùng đang mở BẤT KỲ ChatPage nào, kể
+/// cả đang chat với người khác (không phải người gọi). Giờ so sánh đúng
+/// `currentChatTargetId` với id người gọi.
 class GlobalCallService {
-  GlobalCallService._();
+  GlobalCallService._() {
+    // onCallEnded là broadcast stream của WebRTCSignalBus — nghe thêm ở
+    // đây không ảnh hưởng gì tới các listener khác (VideoCallPage...).
+    // Dùng để tự dọn dẹp channel của GlobalCallService khi cuộc gọi kết
+    // thúc từ phía đối phương (call_end / call_reject), tránh rò rỉ kết
+    // nối WebSocket treo mãi sau khi cuộc gọi đã xong.
+    WebRTCSignalBus.instance.onCallEnded.listen((_) {
+      closeActiveCallChannel();
+    });
+  }
+
   static final GlobalCallService instance = GlobalCallService._();
 
   // ---- state ----
@@ -39,10 +63,25 @@ class GlobalCallService {
     final fromName = data['from_name'] ?? 'Ai đó';
     final fromAvatar = data['from_avatar'] as String?;
     final topic = data['topic'] as String?;
+    final fromId = int.tryParse(data['from_id']?.toString() ?? '');
+    // ✅ Đọc call_type từ FCM — nếu server cũ chưa có field này thì mặc
+    // định "video" để giữ hành vi cũ, nhưng cần server gửi kèm field này
+    // (xem patch room_channel.ex / notifications.ex) để cuộc gọi voice
+    // không bị hiện nhầm thành video khi nhận qua đường FCM.
+    final callType = (data['call_type'] as String?) ?? 'video';
 
     if (topic == null) return;
 
-    if (isChatPageOpen) return;
+    // ✅ Chỉ bỏ qua nếu đang chat ĐÚNG với người đang gọi — không bỏ qua
+    // toàn bộ chỉ vì đang mở một ChatPage bất kỳ. Nếu đang chat với đúng
+    // người gọi thì luồng call_invite/call_accept trong ChatPage tự lo,
+    // không cần GlobalCallService xen vào.
+    if (isChatPageOpen &&
+        fromId != null &&
+        currentChatTargetId != null &&
+        currentChatTargetId == fromId) {
+      return;
+    }
 
     await _connectCallChannel(topic);
 
@@ -52,8 +91,29 @@ class GlobalCallService {
         fromName: fromName,
         fromAvatar: fromAvatar,
         topic: topic,
+        callType: callType,
       );
     });
+  }
+
+  /// Đóng kết nối WebSocket riêng của GlobalCallService (dùng cho cuộc gọi
+  /// đến khi không có ChatPage mở sẵn). Gọi khi:
+  ///   - Cuộc gọi kết thúc do đối phương gửi call_end/call_reject (tự động
+  ///     qua listener onCallEnded ở constructor).
+  ///   - Chính người nhận cuộc gọi chủ động cúp máy trong VideoCallPage
+  ///     (VideoCallPage._hangUp() nên gọi hàm này).
+  void closeActiveCallChannel() {
+    _wsSub?.cancel();
+    _wsSub = null;
+    _broadcastStream = null;
+    _callChannel = null;
+    _activeTopic = null;
+  }
+
+  void cancelPendingCall(String? topic) {
+    if (topic != null && topic == _activeTopic) {
+      _dismissOverlay?.call(); // tự stop chuông + đóng banner + đóng channel
+    }
   }
 
   // ---------------------------------------------------------------
@@ -66,6 +126,7 @@ class GlobalCallService {
     required String fromName,
     String? fromAvatar,
     required String topic,
+    required String callType,
     int attempt = 0,
   }) {
     final overlayState = navigatorKey.currentState?.overlay;
@@ -79,22 +140,36 @@ class GlobalCallService {
           fromName: fromName,
           fromAvatar: fromAvatar,
           topic: topic,
+          callType: callType,
           attempt: attempt + 1,
         );
       });
       return;
     }
     _showOverlay(
-        fromName: fromName, fromAvatar: fromAvatar, topic: topic);
+      fromName: fromName,
+      fromAvatar: fromAvatar,
+      topic: topic,
+      callType: callType,
+    );
   }
 
   Future<void> _connectCallChannel(String topic) async {
-    await _closeCallChannel();
+    // Đóng kênh cũ (nếu có) trước khi mở kênh mới cho cuộc gọi này.
+    closeActiveCallChannel();
     _activeTopic = topic;
 
     try {
+      // ⚠️ FIX: trước đây hardcode nhầm domain "socket.spiritwebs.com"
+      // (không phải domain socket thật của app, xem AppConfig.websocketUrl
+      // là "wss://socket.okinawanew.com/socket/websocket"). Vì domain sai,
+      // kết nối thất bại ÂM THẦM (WebSocketChannel.connect() không đợi
+      // handshake nên không throw), khiến banner vẫn hiện bình thường,
+      // người dùng bấm "Nghe" nhưng call_accept được gửi vào một kết nối
+      // chết — server không bao giờ nhận được. Giờ dùng chung URL với
+      // ChatPage để đảm bảo luôn đúng.
       _callChannel = WebSocketChannel.connect(
-        Uri.parse("wss://socket.spiritwebs.com/socket/websocket"),
+        Uri.parse(AppConfig.websocketUrl),
       );
 
       _callChannel!.sink.add(jsonEncode({
@@ -107,6 +182,10 @@ class GlobalCallService {
       final broadcastStream = _callChannel!.stream.asBroadcastStream();
       _broadcastStream = broadcastStream;
 
+      // ⭐ Subscription này PHẢI sống xuyên suốt cuộc gọi — không hủy khi
+      // người dùng bấm "Nghe". Đây là nơi DUY NHẤT forward webrtc_offer/
+      // answer/ice vào WebRTCSignalBus.handle() trong luồng gọi đến qua
+      // FCM (không có ChatPage nào đang mở để làm việc này thay).
       _wsSub = broadcastStream.listen(
             (data) {
           _onChannelData(data);
@@ -140,18 +219,11 @@ class GlobalCallService {
     }));
   }
 
-  Future<void> _closeCallChannel() async {
-    _wsSub?.cancel();
-    _wsSub = null;
-    await _callChannel?.sink.close();
-    _callChannel = null;
-    _activeTopic = null;
-  }
-
   void _showOverlay({
     required String fromName,
     String? fromAvatar,
     required String topic,
+    required String callType,
   }) {
     // Hủy overlay cũ nếu có
     _dismissOverlay?.call();
@@ -168,7 +240,7 @@ class GlobalCallService {
     if (overlayState == null) return;
 
     late AnimationController controller;
-    bool _accepted = false;
+    bool accepted = false;
 
     void dismiss() {
       FlutterRingtonePlayer().stop();
@@ -178,25 +250,31 @@ class GlobalCallService {
         _overlay = null;
         _dismissOverlay = null;
         controller.dispose();
-        if (!_accepted) _closeCallChannel();
+        // Nếu người dùng từ chối / để hết giờ mà KHÔNG bấm nghe, đóng
+        // luôn kênh — không còn ai cần dùng tới nó nữa.
+        if (!accepted) closeActiveCallChannel();
       });
     }
+
     _dismissOverlay = dismiss;
 
     _overlay = OverlayEntry(
       builder: (ctx) => _GlobalCallBanner(
         fromName: fromName,
         avatarUrl: fromAvatar,
+        callType: callType,
         onCreateController: (c) => controller = c,
         onAccept: () async {
-          _accepted = true;
+          accepted = true;
           _send("call_accept", {});
 
           final activeChannel = _callChannel;
           final activeTopic = _activeTopic;
 
-          _wsSub?.cancel();
-          _wsSub = null;
+          // ✅ KHÔNG hủy _wsSub ở đây nữa (xem giải thích ở đầu file).
+          // Chỉ dọn tham chiếu nội bộ để tránh dùng nhầm cho cuộc gọi
+          // tiếp theo — _wsSub vẫn tiếp tục chạy, forward dữ liệu vào
+          // WebRTCSignalBus suốt thời gian cuộc gọi diễn ra.
           _callChannel = null;
           _activeTopic = null;
 
@@ -215,6 +293,7 @@ class GlobalCallService {
                 socket: activeChannel,
                 topic: activeTopic,
                 isCaller: false,
+                callType: callType, // ✅ giữ đúng loại cuộc gọi (voice/video)
               ),
             ),
           );
@@ -241,6 +320,7 @@ class GlobalCallService {
 class _GlobalCallBanner extends StatefulWidget {
   final String fromName;
   final String? avatarUrl;
+  final String callType;
   final VoidCallback onAccept;
   final VoidCallback onReject;
   final void Function(AnimationController) onCreateController;
@@ -248,6 +328,7 @@ class _GlobalCallBanner extends StatefulWidget {
   const _GlobalCallBanner({
     required this.fromName,
     required this.avatarUrl,
+    required this.callType,
     required this.onAccept,
     required this.onReject,
     required this.onCreateController,
@@ -344,13 +425,20 @@ class _GlobalCallBannerState extends State<_GlobalCallBanner>
                           const SizedBox(height: 2),
                           Row(
                             mainAxisSize: MainAxisSize.min,
-                            children: const [
-                              Icon(Icons.videocam_rounded,
-                                  size: 13, color: Colors.greenAccent),
-                              SizedBox(width: 4),
+                            children: [
+                              Icon(
+                                widget.callType == "voice"
+                                    ? Icons.call_rounded
+                                    : Icons.videocam_rounded,
+                                size: 13,
+                                color: Colors.greenAccent,
+                              ),
+                              const SizedBox(width: 4),
                               Text(
-                                "Cuộc gọi video đến...",
-                                style: TextStyle(
+                                widget.callType == "voice"
+                                    ? "Cuộc gọi thoại đến..."
+                                    : "Cuộc gọi video đến...",
+                                style: const TextStyle(
                                   color: Colors.white60,
                                   fontSize: 12,
                                 ),
@@ -367,7 +455,9 @@ class _GlobalCallBannerState extends State<_GlobalCallBanner>
                     ),
                     const SizedBox(width: 10),
                     _CallButton(
-                      icon: Icons.videocam_rounded,
+                      icon: widget.callType == "voice"
+                          ? Icons.call_rounded
+                          : Icons.videocam_rounded,
                       color: Colors.greenAccent,
                       onTap: widget.onAccept,
                     ),

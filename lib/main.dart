@@ -263,6 +263,10 @@ Future<void> setupFirebaseMessaging() async {
       GlobalCallService.instance.handleFcmCall(message.data);
       return;
     }
+    if (type == 'call_cancel') {
+      GlobalCallService.instance.cancelPendingCall(message.data['topic']);
+      return;
+    }
 
     final title = message.notification?.title ?? "Thông báo";
     final body = message.notification?.body ?? "";
@@ -280,7 +284,13 @@ Future<void> setupFirebaseMessaging() async {
     final senderId = int.tryParse(message.data['sender_id'] ?? '') ?? -1;
     final isChattingWithSender =
         isChatPageOpen && currentChatTargetId != null && currentChatTargetId == senderId;
-    if (!isChattingWithSender) {
+
+    // ✅ Không hiện banner nếu đang mở đúng nhóm chat nhận tin
+    final groupId = int.tryParse(message.data['group_id'] ?? '') ?? -1; // đổi key nếu backend đặt tên khác
+    final isViewingSameGroup =
+        isGroupChatPageOpen && currentGroupChatId != null && currentGroupChatId == groupId;
+
+    if (!isChattingWithSender && !isViewingSameGroup) {
       showAppNotification(title: title, body: body);
     }
   });

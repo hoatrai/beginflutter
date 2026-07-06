@@ -7,6 +7,7 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:intl/intl.dart';
 import 'package:http/http.dart' as http;
 import 'package:permission_handler/permission_handler.dart';
+import 'package:emoji_picker_flutter/emoji_picker_flutter.dart';
 import '../main.dart';
 import '../app_globals.dart';
 import 'user_info_page.dart'; // Trang profile người dùng nếu có
@@ -18,6 +19,8 @@ import 'package:image/image.dart' as img;
 import 'dart:typed_data';
 import '../config/app_config.dart';
 
+// ✅ Danh sách biểu cảm nhanh dùng cho ticker/reaction
+const List<String> kQuickReactions = ['👍', '❤️', '😆', '😮', '😢', '😡'];
 
 Future<bool> requestCallPermissions() async {
   final statuses = await [
@@ -60,6 +63,10 @@ class _ChatPageState extends State<ChatPage> {
   final ScrollController scrollController = ScrollController();
   final ImagePicker _picker = ImagePicker();
 
+  // ---------------- EMOJI PICKER ----------------
+  bool _showEmojiPicker = false;
+  final FocusNode _inputFocusNode = FocusNode();
+
 
 
 
@@ -94,6 +101,7 @@ class _ChatPageState extends State<ChatPage> {
     currentChatTargetId = widget.targetId;
     _loadOldMessages();
     connectSocket();
+    _markChatAsRead(); // ✅ thêm dòng này
   }
 
   @override
@@ -110,6 +118,7 @@ class _ChatPageState extends State<ChatPage> {
     input.dispose();
     messages.dispose();
     typingUserNotifier.dispose();
+    _inputFocusNode.dispose();
     super.dispose();
   }
 
@@ -317,10 +326,6 @@ class _ChatPageState extends State<ChatPage> {
     );
   }
 
-  /*void _reconnectSocket() async {
-    await Future.delayed(Duration(seconds: 2));
-    connectSocket(); // hàm mở WebSocket + join topic
-  }*/
   void _reconnectSocket() async {
     if (_isReconnecting) return;
 
@@ -335,31 +340,6 @@ class _ChatPageState extends State<ChatPage> {
     _isReconnecting = false;
   }
 
-  /*void connectSocket() {
-    channel = WebSocketChannel.connect(Uri.parse(widget.serverUrl));
-    print("🚀 CONNECT → ${widget.serverUrl}");
-
-    channel.stream.listen(
-          (data) {
-        _onData(data);
-      },
-      onDone: () {
-        print("🔌 SOCKET CLOSED → reconnecting...");
-        _reconnectSocket();
-      },
-      onError: (err) {
-        print("❌ SOCKET ERROR: $err → reconnecting...");
-        _reconnectSocket();
-      },
-    );
-
-
-    Future.delayed(const Duration(milliseconds: 300), () {
-      _joinRoom();
-      _initUser();
-      _startHeartbeat();
-    });
-  }*/
   void connectSocket() {
     try {
       channel = WebSocketChannel.connect(Uri.parse(widget.serverUrl));
@@ -475,6 +455,120 @@ class _ChatPageState extends State<ChatPage> {
     } catch (e) {
       print("❌ Lỗi deleteMessage: $e");
     }
+  }
+
+  // ✅ Đánh dấu đã đọc toàn bộ tin nhắn từ targetId gửi cho mình
+  Future<void> _markChatAsRead() async {
+    try {
+      await http.post(
+        Uri.parse("${AppConfig.webDomain}/wp-json/spiritwebs/v1/mark-chat-read"),
+        headers: {"Content-Type": "application/json"},
+        body: jsonEncode({
+          "user_id": widget.userId,
+          "target_id": widget.targetId,
+        }),
+      );
+    } catch (e) {
+      debugPrint("❌ Lỗi đánh dấu đã đọc: $e");
+    }
+  }
+
+  // ---------------- REACTIONS (ticker biểu cảm) ----------------
+  Future<void> _toggleReaction(_Message msg, String emoji) async {
+    final uid = widget.userId;
+    final current = List<int>.from(msg.reactions[emoji] ?? []);
+    final alreadyReacted = current.contains(uid);
+
+    // ✅ Cập nhật UI ngay (optimistic update)
+    if (alreadyReacted) {
+      current.remove(uid);
+      if (current.isEmpty) {
+        msg.reactions.remove(emoji);
+      } else {
+        msg.reactions[emoji] = current;
+      }
+    } else {
+      msg.reactions[emoji] = [...current, uid];
+    }
+    messages.notifyListeners();
+
+    final endpoint = alreadyReacted ? "remove-reaction" : "add-reaction";
+
+    try {
+      // ✅ Lưu DB trước (giống pattern send-message), message_type=private
+      // để phân biệt với reaction của group chat trong cùng bảng dùng chung.
+      await http.post(
+        Uri.parse("${AppConfig.webDomain}/wp-json/spiritwebs/v1/$endpoint"),
+        headers: {"Content-Type": "application/json"},
+        body: jsonEncode({
+          "message_id": msg.id,
+          "user_id": uid,
+          "emoji": emoji,
+          "message_type": "private",
+        }),
+      );
+
+      // ✅ Rồi mới báo realtime cho đối phương
+      channel.sink.add(jsonEncode({
+        "topic": getTopic(),
+        "event": alreadyReacted ? "remove_reaction" : "add_reaction",
+        "payload": {
+          "message_id": msg.id,
+          "emoji": emoji,
+          "user_id": uid,
+          "username": widget.username,
+        },
+        "ref": "${refCounter++}"
+      }));
+    } catch (e) {
+      debugPrint("❌ Reaction sync error: $e");
+      // Lưu DB thất bại thì rollback lại UI cho khỏi lệch dữ liệu
+      if (alreadyReacted) {
+        msg.reactions[emoji] = [...current, uid];
+      } else {
+        final rollback = List<int>.from(msg.reactions[emoji] ?? []);
+        rollback.remove(uid);
+        if (rollback.isEmpty) {
+          msg.reactions.remove(emoji);
+        } else {
+          msg.reactions[emoji] = rollback;
+        }
+      }
+      messages.notifyListeners();
+    }
+  }
+
+  // ---------------- EMOJI PICKER (nhập emoji vào ô tin nhắn) ----------------
+  void _toggleEmojiPicker() {
+    if (_showEmojiPicker) {
+      setState(() => _showEmojiPicker = false);
+      _inputFocusNode.requestFocus();
+    } else {
+      // Ẩn bàn phím hệ thống trước khi hiện bảng emoji, tránh 2 bàn phím
+      // (system keyboard + emoji picker) tranh nhau không gian phía dưới.
+      _inputFocusNode.unfocus();
+      Future.delayed(const Duration(milliseconds: 100), () {
+        if (mounted) setState(() => _showEmojiPicker = true);
+      });
+    }
+  }
+
+  void _onEmojiSelected(Category? category, Emoji emoji) {
+    input.text += emoji.emoji;
+    input.selection = TextSelection.fromPosition(
+      TextPosition(offset: input.text.length),
+    );
+    sendTyping(); // vẫn báo "đang gõ" như gõ bàn phím bình thường
+    setState(() {});
+  }
+
+  void _onEmojiBackspacePressed() {
+    if (input.text.isEmpty) return;
+    input.text = input.text.characters.skipLast(1).toString();
+    input.selection = TextSelection.fromPosition(
+      TextPosition(offset: input.text.length),
+    );
+    setState(() {});
   }
 
 
@@ -637,10 +731,49 @@ class _ChatPageState extends State<ChatPage> {
         messages.value = List<_Message>.from(messages.value)..add(m);
         messages.notifyListeners();
         _scrollToBottom();
+        if (!isOwn) _markChatAsRead();
       }
     }
 
+    // ✅ Có người thả biểu cảm cho 1 tin nhắn
+    if (event == "reaction_added") {
+      final messageId = payload["message_id"]?.toString();
+      final emoji = payload["emoji"]?.toString();
+      final userId = int.tryParse(payload["user_id"].toString()) ?? 0;
 
+      if (messageId != null && emoji != null) {
+        final idx = messages.value.indexWhere((m) => m.id == messageId);
+        if (idx != -1) {
+          final list = List<int>.from(messages.value[idx].reactions[emoji] ?? []);
+          if (!list.contains(userId)) {
+            list.add(userId);
+            messages.value[idx].reactions[emoji] = list;
+            messages.notifyListeners();
+          }
+        }
+      }
+    }
+
+    // ✅ Có người bỏ biểu cảm khỏi 1 tin nhắn
+    if (event == "reaction_removed") {
+      final messageId = payload["message_id"]?.toString();
+      final emoji = payload["emoji"]?.toString();
+      final userId = int.tryParse(payload["user_id"].toString()) ?? 0;
+
+      if (messageId != null && emoji != null) {
+        final idx = messages.value.indexWhere((m) => m.id == messageId);
+        if (idx != -1) {
+          final list = List<int>.from(messages.value[idx].reactions[emoji] ?? []);
+          list.remove(userId);
+          if (list.isEmpty) {
+            messages.value[idx].reactions.remove(emoji);
+          } else {
+            messages.value[idx].reactions[emoji] = list;
+          }
+          messages.notifyListeners();
+        }
+      }
+    }
 
     if (event == "typing") {
       final senderId = payload["sender_id"];
@@ -721,6 +854,8 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   Future<void> pickImage() async {
+    if (_showEmojiPicker) setState(() => _showEmojiPicker = false);
+
     final XFile? file = await _picker.pickImage(
       source: ImageSource.gallery,
       imageQuality: 80,
@@ -768,6 +903,8 @@ class _ChatPageState extends State<ChatPage> {
 
 
   Future<void> pickFile() async {
+    if (_showEmojiPicker) setState(() => _showEmojiPicker = false);
+
     final result = await FilePicker.platform.pickFiles(withData: true);
     if (result == null) return;
 
@@ -947,6 +1084,18 @@ class _ChatPageState extends State<ChatPage> {
           if (rawType == 'image') msgType = MessageType.image;
           if (rawType == 'file') msgType = MessageType.file;
 
+          // ✅ Parse reactions nếu backend trả về, dạng { "👍": [1,2], "❤️": [3] }
+          final Map<String, List<int>> parsedReactions = {};
+          final rawReactions = m['reactions'];
+          if (rawReactions is Map) {
+            rawReactions.forEach((key, value) {
+              if (value is List) {
+                parsedReactions[key.toString()] =
+                    value.map((e) => int.tryParse(e.toString()) ?? 0).toList();
+              }
+            });
+          }
+
           return _Message(
             id: m['id'].toString(),
             senderId: senderId,
@@ -964,6 +1113,7 @@ class _ChatPageState extends State<ChatPage> {
             type: msgType,
             fileUrl: m['file_url'],
             fileName: m['file_name'],
+            reactions: parsedReactions,
           );
         }).toList();
         _scrollToBottom();
@@ -1113,6 +1263,7 @@ class _ChatPageState extends State<ChatPage> {
                       currentUserId: widget.userId,
                       targetAvatar: widget.targetAvatar,
                       onDelete: (id) => deleteMessage(id),
+                      onReact: (emoji) => _toggleReaction(list[i], emoji),
                     ),
 
                   );
@@ -1133,8 +1284,19 @@ class _ChatPageState extends State<ChatPage> {
               ),
               child: SafeArea(
                 top: false,
+                bottom: !_showEmojiPicker,
                 child: Row(
                   children: [
+                    IconButton(
+                      icon: Icon(
+                        _showEmojiPicker
+                            ? Icons.keyboard
+                            : Icons.emoji_emotions_outlined,
+                        color: Colors.white,
+                      ),
+                      tooltip: "Emoji",
+                      onPressed: _toggleEmojiPicker,
+                    ),
                     IconButton(
                       icon: const Icon(Icons.image, color: Colors.white),
                       onPressed: pickImage,
@@ -1146,6 +1308,12 @@ class _ChatPageState extends State<ChatPage> {
                     Expanded(
                       child: TextField(
                         controller: input,
+                        focusNode: _inputFocusNode,
+                        onTap: () {
+                          if (_showEmojiPicker) {
+                            setState(() => _showEmojiPicker = false);
+                          }
+                        },
                         onChanged: (_) => sendTyping(),
                         onSubmitted: (_) => sendMessage(),
                         style: const TextStyle(color: Colors.white),
@@ -1164,6 +1332,50 @@ class _ChatPageState extends State<ChatPage> {
                 ),
               ),
             ),
+
+            // ✅ Bảng chọn emoji — chỉ hiện khi bấm icon 😊
+            if (_showEmojiPicker)
+              SizedBox(
+                height: 250,
+                child: EmojiPicker(
+                  onEmojiSelected: _onEmojiSelected,
+                  onBackspacePressed: _onEmojiBackspacePressed,
+                  config: Config(
+                    height: 250,
+                    checkPlatformCompatibility: true,
+                    emojiViewConfig: EmojiViewConfig(
+                      columns: 7,
+                      emojiSizeMax: 28,
+                      backgroundColor: const Color(0xFF1E293B),
+                      recentsLimit: 28,
+                      noRecents: const Text(
+                        'Chưa có emoji gần đây',
+                        style: TextStyle(fontSize: 14, color: Colors.white54),
+                        textAlign: TextAlign.center,
+                      ),
+                      loadingIndicator: const SizedBox.shrink(),
+                    ),
+                    skinToneConfig: const SkinToneConfig(
+                      dialogBackgroundColor: Colors.white,
+                      indicatorColor: Colors.grey,
+                    ),
+                    categoryViewConfig: CategoryViewConfig(
+                      backgroundColor: const Color(0xFF1E293B),
+                      indicatorColor: accentOrange,
+                      iconColor: Colors.white70,
+                      iconColorSelected: accentOrange,
+                      backspaceColor: accentOrange,
+                    ),
+                    bottomActionBarConfig: const BottomActionBarConfig(
+                      backgroundColor: Color(0xFF1E293B),
+                      buttonIconColor: Colors.white70,
+                    ),
+                    searchViewConfig: const SearchViewConfig(
+                      backgroundColor: Color(0xFF1E293B),
+                    ),
+                  ),
+                ),
+              ),
           ],
         ),
       ),
@@ -1190,6 +1402,8 @@ class _Message {
   final MessageType type;
   final String? fileUrl;
   final String? fileName;
+  // ✅ emoji -> danh sách userId đã thả biểu cảm đó
+  final Map<String, List<int>> reactions;
 
   _Message({
     required this.id,
@@ -1204,7 +1418,8 @@ class _Message {
     this.type = MessageType.text,
     this.fileUrl,
     this.fileName,
-  });
+    Map<String, List<int>>? reactions,
+  }) : reactions = reactions ?? {};
 }
 
 // ---------------- Message Bubble giống Phoenix ----------------
@@ -1215,6 +1430,7 @@ class _MessageBubblePhoenix extends StatefulWidget {
   final int currentUserId;
   final String? targetAvatar;
   final void Function(String msgId)? onDelete; // callback xóa
+  final void Function(String emoji)? onReact;  // callback thả biểu cảm
 
   const _MessageBubblePhoenix({
     super.key,
@@ -1224,6 +1440,7 @@ class _MessageBubblePhoenix extends StatefulWidget {
     required this.currentUserId,
     this.targetAvatar,
     this.onDelete,
+    this.onReact,
   });
 
   @override
@@ -1296,6 +1513,82 @@ class _MessageBubblePhoenixState extends State<_MessageBubblePhoenix> {
       await Future.delayed(const Duration(milliseconds: 250));
       widget.onDelete?.call(widget.msg.id);
     }
+  }
+
+  // ✅ Bottom sheet chọn biểu cảm + (nếu là tin của mình) nút xóa
+  void _showMessageActions() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (sheetContext) => Container(
+        padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 16),
+        decoration: const BoxDecoration(
+          color: Color(0xFF1E293B),
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              children: kQuickReactions.map((emoji) {
+                return GestureDetector(
+                  onTap: () {
+                    Navigator.pop(sheetContext);
+                    widget.onReact?.call(emoji);
+                  },
+                  child: Text(emoji, style: const TextStyle(fontSize: 30)),
+                );
+              }).toList(),
+            ),
+            if (widget.msg.isOwn) ...[
+              const SizedBox(height: 8),
+              const Divider(color: Colors.white24),
+              ListTile(
+                leading: const Icon(Icons.delete_outline, color: Colors.redAccent),
+                title: const Text("Xóa tin nhắn", style: TextStyle(color: Colors.white)),
+                onTap: () {
+                  Navigator.pop(sheetContext);
+                  _animateDelete();
+                },
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ✅ Dòng hiển thị các biểu cảm đã thả cho tin nhắn này
+  Widget _buildReactionsRow() {
+    return Wrap(
+      spacing: 4,
+      runSpacing: 4,
+      children: widget.msg.reactions.entries.map((entry) {
+        final emoji = entry.key;
+        final userIds = entry.value;
+        final reactedByMe = userIds.contains(widget.currentUserId);
+        return GestureDetector(
+          onTap: () => widget.onReact?.call(emoji),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            decoration: BoxDecoration(
+              color: reactedByMe
+                  ? Colors.white.withOpacity(0.35)
+                  : Colors.black.withOpacity(0.2),
+              borderRadius: BorderRadius.circular(10),
+              border: reactedByMe
+                  ? Border.all(color: Colors.white, width: 1)
+                  : null,
+            ),
+            child: Text(
+              "$emoji ${userIds.length}",
+              style: const TextStyle(fontSize: 12, color: Colors.white),
+            ),
+          ),
+        );
+      }).toList(),
+    );
   }
 
 
@@ -1495,7 +1788,7 @@ class _MessageBubblePhoenixState extends State<_MessageBubblePhoenix> {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
       child: GestureDetector(
-        onLongPress: isOwn ? _animateDelete : null,
+        onLongPress: _showMessageActions,
         child: AnimatedOpacity(
           duration: const Duration(milliseconds: 250),
           opacity: opacity,
@@ -1538,45 +1831,56 @@ class _MessageBubblePhoenixState extends State<_MessageBubblePhoenix> {
                 if (!isOwn) const SizedBox(width: 6),
 
                 Flexible(
-                  child: Container(
-                    padding: noBubble
-                        ? EdgeInsets.zero
-                        : const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                    decoration: noBubble
-                        ? null
-                        : BoxDecoration(
-                      gradient: LinearGradient(
-                        colors: isOwn
-                            ? [widget.primaryBlue.withOpacity(0.9), widget.primaryBlue]
-                            : [widget.accentOrange.withOpacity(0.9), widget.accentOrange],
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
-                      ),
-                      borderRadius: BorderRadius.only(
-                        topLeft: const Radius.circular(12),
-                        topRight: const Radius.circular(12),
-                        bottomLeft: Radius.circular(isOwn ? 12 : 0),
-                        bottomRight: Radius.circular(isOwn ? 0 : 12),
-                      ),
-                    ),
-                    child: Column(
-                      crossAxisAlignment:
-                      isOwn ? CrossAxisAlignment.end : CrossAxisAlignment.start,
-                      children: [
-                        contentWidget,
-                        if (widget.msg.type != MessageType.image)
-                          const SizedBox(height: 3),
-                        Text(
-                          _formatTime(widget.msg.time),
-                          style: TextStyle(
-                            fontSize: 10,
-                            color: widget.msg.type == MessageType.image
-                                ? Colors.white
-                                : Colors.white70,
+                  child: Column(
+                    crossAxisAlignment:
+                    isOwn ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+                    children: [
+                      Container(
+                        padding: noBubble
+                            ? EdgeInsets.zero
+                            : const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                        decoration: noBubble
+                            ? null
+                            : BoxDecoration(
+                          gradient: LinearGradient(
+                            colors: isOwn
+                                ? [widget.primaryBlue.withOpacity(0.9), widget.primaryBlue]
+                                : [widget.accentOrange.withOpacity(0.9), widget.accentOrange],
+                            begin: Alignment.topLeft,
+                            end: Alignment.bottomRight,
+                          ),
+                          borderRadius: BorderRadius.only(
+                            topLeft: const Radius.circular(12),
+                            topRight: const Radius.circular(12),
+                            bottomLeft: Radius.circular(isOwn ? 12 : 0),
+                            bottomRight: Radius.circular(isOwn ? 0 : 12),
                           ),
                         ),
+                        child: Column(
+                          crossAxisAlignment:
+                          isOwn ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+                          children: [
+                            contentWidget,
+                            if (widget.msg.type != MessageType.image)
+                              const SizedBox(height: 3),
+                            Text(
+                              _formatTime(widget.msg.time),
+                              style: TextStyle(
+                                fontSize: 10,
+                                color: widget.msg.type == MessageType.image
+                                    ? Colors.white
+                                    : Colors.white70,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      // ✅ hiển thị ticker/biểu cảm nếu có
+                      if (widget.msg.reactions.isNotEmpty) ...[
+                        const SizedBox(height: 4),
+                        _buildReactionsRow(),
                       ],
-                    ),
+                    ],
                   ),
                 ),
               ],
@@ -1875,6 +2179,9 @@ class _OutgoingCallScreenState extends State<_OutgoingCallScreen>
   late AnimationController _pulseController;
   late Animation<double> _pulseAnimation;
 
+  final Color primaryBlue = const Color(0xFF1E3A8A);
+  final Color accentOrange = const Color(0xFFFF7F50);
+
   @override
   void initState() {
     super.initState();
@@ -1896,94 +2203,119 @@ class _OutgoingCallScreenState extends State<_OutgoingCallScreen>
   @override
   Widget build(BuildContext context) {
     return WillPopScope(
-      // Chặn bấm nút back cứng của Android đóng màn hình mà không báo
-      // cho phía bên kia — bắt buộc đi qua onCancel() để gửi call_end.
       onWillPop: () async {
         widget.onCancel();
         return false;
       },
       child: Scaffold(
-        backgroundColor: const Color(0xFF111318),
-        body: SafeArea(
-          child: Column(
-            children: [
-              const SizedBox(height: 40),
-              Text(
-                widget.callType == "voice" ? "📞 Đang gọi thoại..." : "📹 Đang gọi video...",
-                style: const TextStyle(
-                  color: Colors.white70,
-                  fontSize: 15,
-                  letterSpacing: 0.5,
-                ),
-              ),
-              const Spacer(),
-
-              // Avatar to, có vòng pulse lan tỏa giống hiệu ứng "đang đổ
-              // chuông" của các app gọi điện thông thường.
-              ScaleTransition(
-                scale: _pulseAnimation,
-                child: Container(
-                  width: 130,
-                  height: 130,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    border: Border.all(color: Colors.white24, width: 2),
+        // ✅ Nền gradient đồng bộ với theme app thay vì màu đen phẳng
+        body: Container(
+          width: double.infinity,
+          height: double.infinity,
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: [primaryBlue, Colors.black.withOpacity(0.85), accentOrange.withOpacity(0.6)],
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+            ),
+          ),
+          child: SafeArea(
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                // ✅ Dùng SingleChildScrollView + ConstrainedBox thay vì
+                // Column cứng với Spacer — nếu nội dung cao hơn màn hình
+                // (máy nhỏ), nó sẽ scroll được thay vì bị tràn/vỡ layout
+                // (nguyên nhân gây dải cảnh báo đen-vàng lệch 1 bên).
+                return SingleChildScrollView(
+                  physics: const NeverScrollableScrollPhysics(),
+                  child: ConstrainedBox(
+                    constraints: BoxConstraints(minHeight: constraints.maxHeight),
+                    child: IntrinsicHeight(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          const SizedBox(height: 32),
+                          Text(
+                            widget.callType == "voice"
+                                ? "📞 Đang gọi thoại..."
+                                : "📹 Đang gọi video...",
+                            style: const TextStyle(
+                              color: Colors.white70,
+                              fontSize: 15,
+                              letterSpacing: 0.5,
+                            ),
+                          ),
+                          const Expanded(child: SizedBox()),
+                          ScaleTransition(
+                            scale: _pulseAnimation,
+                            child: Container(
+                              width: 120,
+                              height: 120,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                border: Border.all(color: Colors.white24, width: 2),
+                              ),
+                              padding: const EdgeInsets.all(6),
+                              child: CircleAvatar(
+                                radius: 54,
+                                backgroundColor: Colors.white24,
+                                backgroundImage: (widget.targetAvatar != null &&
+                                    widget.targetAvatar!.isNotEmpty)
+                                    ? NetworkImage(widget.targetAvatar!)
+                                    : null,
+                                child: (widget.targetAvatar == null ||
+                                    widget.targetAvatar!.isEmpty)
+                                    ? const Icon(Icons.person,
+                                    color: Colors.white70, size: 46)
+                                    : null,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 20),
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 24),
+                            child: Text(
+                              widget.targetName,
+                              textAlign: TextAlign.center,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 22,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 6),
+                          const Text(
+                            "Đang chờ phản hồi...",
+                            style: TextStyle(color: Colors.white54, fontSize: 13),
+                          ),
+                          const Expanded(child: SizedBox()),
+                          GestureDetector(
+                            onTap: widget.onCancel,
+                            child: Container(
+                              width: 62,
+                              height: 62,
+                              decoration: const BoxDecoration(
+                                color: Colors.redAccent,
+                                shape: BoxShape.circle,
+                              ),
+                              child: const Icon(Icons.call_end_rounded,
+                                  color: Colors.white, size: 28),
+                            ),
+                          ),
+                          const SizedBox(height: 10),
+                          const Text(
+                            "Hủy",
+                            style: TextStyle(color: Colors.white54, fontSize: 12),
+                          ),
+                          const SizedBox(height: 32),
+                        ],
+                      ),
+                    ),
                   ),
-                  padding: const EdgeInsets.all(6),
-                  child: CircleAvatar(
-                    radius: 60,
-                    backgroundColor: Colors.white24,
-                    backgroundImage: (widget.targetAvatar != null &&
-                        widget.targetAvatar!.isNotEmpty)
-                        ? NetworkImage(widget.targetAvatar!)
-                        : null,
-                    child: (widget.targetAvatar == null ||
-                        widget.targetAvatar!.isEmpty)
-                        ? const Icon(Icons.person,
-                        color: Colors.white70, size: 50)
-                        : null,
-                  ),
-                ),
-              ),
-
-              const SizedBox(height: 24),
-              Text(
-                widget.targetName,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 22,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-              const SizedBox(height: 8),
-              const Text(
-                "Đang chờ phản hồi...",
-                style: TextStyle(color: Colors.white54, fontSize: 13),
-              ),
-
-              const Spacer(),
-
-              // Nút hủy gọi — đỏ, to, dễ bấm, giống mọi app gọi điện khác.
-              GestureDetector(
-                onTap: widget.onCancel,
-                child: Container(
-                  width: 64,
-                  height: 64,
-                  decoration: const BoxDecoration(
-                    color: Colors.redAccent,
-                    shape: BoxShape.circle,
-                  ),
-                  child: const Icon(Icons.call_end_rounded,
-                      color: Colors.white, size: 30),
-                ),
-              ),
-              const SizedBox(height: 12),
-              const Text(
-                "Hủy",
-                style: TextStyle(color: Colors.white54, fontSize: 12),
-              ),
-              const SizedBox(height: 48),
-            ],
+                );
+              },
+            ),
           ),
         ),
       ),
