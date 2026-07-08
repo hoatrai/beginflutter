@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import '../helpers/storage_helper.dart';
+import '../config/app_config.dart';
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
@@ -11,6 +12,12 @@ int? currentChatTargetId;
 // ✅ thêm mới — theo dõi màn hình chat nhóm đang mở
 bool isGroupChatPageOpen = false;
 int? currentGroupChatId;
+
+// ✅ thêm mới — theo dõi trang chi tiết "kèo" (invite) đang mở, để
+// không hiện banner FCM trùng lặp khi user đang xem đúng trang đó
+// (trang đó đã tự hiện SnackBar realtime qua socket rồi).
+bool isInviteDetailOpen = false;
+int? currentInviteId;
 /// ✅ Avatar của user hiện tại — nguồn chuẩn duy nhất cho toàn app.
 /// Được set mỗi khi fetchMeSafe() thành công (app start, sau login, v.v.)
 String currentUserAvatar = '';
@@ -29,7 +36,7 @@ Future<FetchMeResponse> fetchMeSafe() async {
 
     final res = await http
         .get(
-      Uri.parse("https://spiritwebs.com/wp-json/spiritwebs/v1/me"),
+      Uri.parse("${AppConfig.webDomain}/wp-json/spiritwebs/v1/me"),
       headers: {"Authorization": "Bearer $token"},
     )
         .timeout(const Duration(seconds: 10));

@@ -65,4 +65,21 @@ class NotificationStore {
       unreadCount.value = unreadCount.value - 1;
     }
   }
+
+  // 👇 xoá 1 thông báo (vuốt để xoá)
+  static void remove(String id) {
+    final index = items.indexWhere((e) => e.id == id);
+    if (index == -1) return;
+    final wasUnread = !items[index].isRead;
+    items.removeAt(index);
+    if (wasUnread && unreadCount.value > 0) {
+      unreadCount.value = unreadCount.value - 1;
+    }
+  }
+
+  // 👇 xoá toàn bộ
+  static void clearAll() {
+    items.clear();
+    unreadCount.value = 0;
+  }
 }

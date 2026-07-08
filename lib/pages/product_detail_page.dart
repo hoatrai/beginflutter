@@ -23,6 +23,7 @@ import 'group_chat_page.dart';
 import 'invite_map_page.dart';
 import 'spin_wheel.dart';
 import '../config/app_config.dart';
+import '../app_globals.dart';
 
 // =============================================================================
 // CONSTANTS
@@ -228,6 +229,7 @@ class _ProductDetailPageState extends State<ProductDetailPage>
   bool allowRating = false;
 
   int? _currentUserId;
+  String? _currentUserName;
   int? inviteId;
   int joinedCount = 0;
   int maxPeople   = 0;
@@ -282,6 +284,10 @@ class _ProductDetailPageState extends State<ProductDetailPage>
 
   @override
   void dispose() {
+    if (currentInviteId == inviteId) {
+      isInviteDetailOpen = false;
+      currentInviteId = null;
+    }
     _heartbeatTimer?.cancel();
     _channel.sink.close();
     _pulseController.dispose();
@@ -382,6 +388,7 @@ class _ProductDetailPageState extends State<ProductDetailPage>
       };
       if (reloadEvents.contains(event) && payload['invite_id'] == inviteId) {
         await _fetchParticipants(inviteId!);
+        if (mounted) _showInviteNotification(event!, payload);
       }
     } catch (e) {
       debugPrint('❌ Socket parse error: $e');
@@ -400,6 +407,47 @@ class _ProductDetailPageState extends State<ProductDetailPage>
   }
 
   String _nowRef() => DateTime.now().millisecondsSinceEpoch.toString();
+
+  /// Bắn một event lên topic "invite:$inviteId" để các client khác đang
+  /// mở cùng invite này nhận được realtime (server sẽ broadcast_from!,
+  /// nghĩa là chính máy mình sẽ KHÔNG nhận lại event của chính mình).
+  void _pushInviteEvent(String event, Map<String, dynamic> payload) {
+    if (inviteId == null) return;
+    _channel.sink.add(jsonEncode({
+      'topic':   'invite:$inviteId',
+      'event':   event,
+      'payload': {...payload, 'invite_id': inviteId},
+      'ref':     _nowRef(),
+    }));
+  }
+
+  /// Hiện snackbar thông báo khi nhận được event từ người khác trong nhóm.
+  void _showInviteNotification(String event, Map<String, dynamic> payload) {
+    final name = payload['user_name']?.toString() ?? 'Ai đó';
+    String? msg;
+    switch (event) {
+      case 'user_joined':
+        msg = '🙋 $name vừa tham gia bàn nhậu';
+        break;
+      case 'user_left':
+        msg = '🚪 $name đã rời bàn';
+        break;
+      case 'user_kicked':
+        msg = '⛔ $name đã bị mời ra khỏi bàn';
+        break;
+      case 'invite_closed':
+        msg = '🔒 Chủ phòng đã đóng bàn';
+        break;
+      case 'invite_opened':
+        msg = '🔓 Chủ phòng đã mở lại bàn';
+        break;
+      case 'attendance_updated':
+        final status = AttendanceStatusExt.fromKey(payload['status']?.toString());
+        msg = '📍 $name: ${status.label}';
+        break;
+    }
+    if (msg != null) _showSnack(msg);
+  }
 
   // ==========================================================================
   // API — AUTH
@@ -423,6 +471,15 @@ class _ProductDetailPageState extends State<ProductDetailPage>
     setState(() {
       _currentUserId = id != null ? int.tryParse(id.toString()) : null;
     });
+    try {
+      final currentUser = await UserHelper.getCurrentUser();
+      if (!mounted) return;
+      setState(() {
+        _currentUserName = (currentUser['username'] as String?) ?? 'Ai đó';
+      });
+    } catch (e) {
+      debugPrint('⚠️ _loadUserId (username): $e');
+    }
   }
 
   Future<void> _loadJoinStatus() async {
@@ -433,6 +490,8 @@ class _ProductDetailPageState extends State<ProductDetailPage>
       final id = await _fetchInviteIdByProduct(productId);
       if (id != null && mounted) {
         setState(() => inviteId = id);
+        isInviteDetailOpen = true;
+        currentInviteId = id;
         if (_socketJoined) _joinInviteRoom(id);
         await Future.wait([_fetchInviteMedia(), _fetchParticipants(id)]);
       }
@@ -559,6 +618,7 @@ class _ProductDetailPageState extends State<ProductDetailPage>
       final data = jsonDecode(res.body) as Map<String, dynamic>;
       if (data['success'] != true) throw Exception(data['message']);
       await _fetchParticipants(inviteId!);
+      _pushInviteEvent('user_joined', {'user_name': _currentUserName});
       _showSnack('Bạn đã tham gia thành công! 🎉');
     } catch (e) {
       _showSnack('Không thể tham gia: $e');
@@ -660,6 +720,7 @@ class _ProductDetailPageState extends State<ProductDetailPage>
       final data = jsonDecode(res.body) as Map<String, dynamic>;
       if (data['success'] != true) throw Exception(data['message']);
       await _fetchParticipants(inviteId!);
+      _pushInviteEvent('user_left', {'user_name': _currentUserName});
       _showSnack('Đã rời phòng');
     } catch (e) {
       _showSnack('Không thể rời phòng: $e');
@@ -670,6 +731,14 @@ class _ProductDetailPageState extends State<ProductDetailPage>
 
   Future<void> _kickUser(int targetUserId) async {
     if (inviteId == null) return;
+    final target = _participants.firstWhere(
+          (p) => p.userId == targetUserId,
+      orElse: () => Participant(
+        userId: 0, name: 'Thành viên', status: '', role: '',
+        attendanceStatus: AttendanceStatus.undecided,
+        trustScore: 50,
+      ),
+    );
     try {
       final res = await http.post(
         Uri.parse(_ApiUrls.inviteKick),
@@ -679,6 +748,10 @@ class _ProductDetailPageState extends State<ProductDetailPage>
       final data = jsonDecode(res.body) as Map<String, dynamic>;
       if (data['success'] != true) throw Exception(data['message']);
       await _fetchParticipants(inviteId!);
+      _pushInviteEvent('user_kicked', {
+        'user_name': target.name,
+        'target_user_id': targetUserId,
+      });
       _showSnack('Đã kick thành viên');
     } catch (e) {
       _showSnack('Không thể kick: $e');
@@ -689,7 +762,8 @@ class _ProductDetailPageState extends State<ProductDetailPage>
     if (inviteId == null) return;
     setState(() => _isUpdatingInviteStatus = true);
     try {
-      final url = inviteStatus == 'open' ? _ApiUrls.inviteClose : _ApiUrls.inviteOpen;
+      final wasOpen = inviteStatus == 'open';
+      final url = wasOpen ? _ApiUrls.inviteClose : _ApiUrls.inviteOpen;
       final res = await http.post(
         Uri.parse(url),
         headers: await _authHeaders(),
@@ -698,7 +772,8 @@ class _ProductDetailPageState extends State<ProductDetailPage>
       final data = jsonDecode(res.body) as Map<String, dynamic>;
       if (data['success'] == true) {
         await _fetchParticipants(inviteId!);
-        _showSnack(inviteStatus == 'open' ? 'Đã mở lại bàn' : 'Đã đóng bàn');
+        _pushInviteEvent(wasOpen ? 'invite_closed' : 'invite_opened', {});
+        _showSnack(wasOpen ? 'Đã đóng bàn' : 'Đã mở lại bàn');
       }
     } catch (e) {
       debugPrint('❌ _toggleInviteStatus: $e');
@@ -724,6 +799,10 @@ class _ProductDetailPageState extends State<ProductDetailPage>
             _participants[idx] =
                 _participants[idx].copyWith(attendanceStatus: status);
           }
+        });
+        _pushInviteEvent('attendance_updated', {
+          'user_name': _currentUserName,
+          'status': status.key,
         });
         _showSnack('✅ Đã cập nhật trạng thái');
       } else {

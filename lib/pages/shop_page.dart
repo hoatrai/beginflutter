@@ -17,6 +17,7 @@ import 'my_keo_page.dart';
 import 'create_invite_page.dart';
 import '../main.dart' show unreadNotiVN;
 import 'notification_page.dart';
+import 'notification_store.dart';
 import '../config/app_config.dart';
 
 //import 'chat_page_phoenix.dart';
@@ -46,6 +47,13 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
   bool sendingInvite = false;
   bool isOpeningLocation = false;
   bool isShowingLocationDialog = false;
+  // 🔧 FIX: dedupe xin quyền vị trí — trước đây _requestLocationOnFirstLoad()
+  // (chạy khi vào trang) và fetchNearbyFindingUsers() -> ensureLocationPermission()
+  // (tự chạy nếu trước đó đang "tìm kèo") không được await cùng nhau nên có
+  // thể CÙNG LÚC gọi Geolocator.requestPermission()/openLocationSettings(),
+  // gây ra 2 popup xin bật định vị chồng lên nhau. Dùng 1 Future dùng chung
+  // để lệnh gọi thứ 2 chờ kết quả của lệnh gọi thứ 1 thay vì tự bắn riêng.
+  Future<bool>? _locationPermissionInFlight;
   bool justReturnedFromSettings = false;
   bool isUserScrolling = false;
   Timer? autoScrollTimer;
@@ -372,26 +380,9 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
 
   Future<void> _requestLocationOnFirstLoad() async {
     try {
-      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
-      if (!serviceEnabled) {
-        if (mounted) _showLocationDialog(context, "Vui lòng bật GPS để tìm kèo gần bạn.");
-        return;
-      }
-
-      LocationPermission permission = await Geolocator.checkPermission();
-      if (permission == LocationPermission.denied) {
-        permission = await Geolocator.requestPermission();
-      }
-
-      if (permission == LocationPermission.deniedForever) {
-        if (mounted) _showLocationDialog(context, "Bạn đã tắt quyền vị trí.\nVào Cài đặt để bật lại.");
-        return;
-      }
-
-      if (permission == LocationPermission.whileInUse ||
-          permission == LocationPermission.always) {
-        _resolveMyLocationSilent();
-      }
+      final granted =
+          await _requestLocationPermissionShared(openSettingsDirectly: false);
+      if (granted) _resolveMyLocationSilent();
     } catch (e) {
       debugPrint("⚠️ _requestLocationOnFirstLoad: $e");
     }
@@ -822,29 +813,66 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
   }
 
 // 🟠 Dùng khi BẬT TÌM KÈO — bắt buộc, mở thẳng Settings nếu cần
-  Future<bool> ensureLocationPermission(BuildContext context) async {
-    bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+  Future<bool> ensureLocationPermission(BuildContext context) {
+    return _requestLocationPermissionShared(openSettingsDirectly: true);
+  }
 
-    if (!serviceEnabled) {
-      isOpeningLocation = true;
-      await Geolocator.openLocationSettings(); // mở thẳng
-      return false;
+  /// Lõi xin quyền vị trí DÙNG CHUNG cho mọi nơi trong trang — chỉ chạy
+  /// 1 request tại 1 thời điểm (xem `_locationPermissionInFlight` ở khai
+  /// báo field), tránh 2 popup xin bật định vị chồng lên nhau khi nhiều
+  /// luồng cùng cần quyền vị trí lúc mới vào trang.
+  ///
+  /// [openSettingsDirectly] = true  -> hành vi "bắt buộc" (khi user chủ
+  ///   động bấm nút, vd "Bật tìm kèo"): mở thẳng Cài đặt nếu thiếu quyền.
+  /// [openSettingsDirectly] = false -> hành vi "nhẹ nhàng" (khi tự động
+  ///   chạy lúc vào trang): chỉ hiện bottom sheet gợi ý, không tự mở Cài đặt.
+  Future<bool> _requestLocationPermissionShared({
+    required bool openSettingsDirectly,
+  }) {
+    return _locationPermissionInFlight ??=
+        _doRequestLocationPermission(openSettingsDirectly: openSettingsDirectly);
+  }
+
+  Future<bool> _doRequestLocationPermission({
+    required bool openSettingsDirectly,
+  }) async {
+    try {
+      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+      if (!serviceEnabled) {
+        if (openSettingsDirectly) {
+          isOpeningLocation = true;
+          await Geolocator.openLocationSettings();
+        } else if (mounted) {
+          _showLocationDialog(context, "Vui lòng bật GPS để tìm kèo gần bạn.");
+        }
+        return false;
+      }
+
+      LocationPermission permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+        if (permission == LocationPermission.denied) return false;
+      }
+
+      if (permission == LocationPermission.deniedForever) {
+        if (openSettingsDirectly) {
+          isOpeningLocation = true;
+          await Geolocator.openAppSettings();
+        } else if (mounted) {
+          _showLocationDialog(
+              context, "Bạn đã tắt quyền vị trí.\nVào Cài đặt để bật lại.");
+        }
+        return false;
+      }
+
+      return permission == LocationPermission.whileInUse ||
+          permission == LocationPermission.always;
+    } finally {
+      // Reset NGAY sau khi xong (không giữ mãi) — lần xin quyền tiếp theo
+      // (vd user bấm lại nút "Bật tìm kèo") vẫn kiểm tra lại bình thường,
+      // chỉ dedupe những request đến CÙNG LÚC.
+      _locationPermissionInFlight = null;
     }
-
-    LocationPermission permission = await Geolocator.checkPermission();
-
-    if (permission == LocationPermission.denied) {
-      permission = await Geolocator.requestPermission();
-      if (permission == LocationPermission.denied) return false;
-    }
-
-    if (permission == LocationPermission.deniedForever) {
-      isOpeningLocation = true;
-      await Geolocator.openAppSettings(); // mở thẳng app settings
-      return false;
-    }
-
-    return true;
   }
 
   void _showLocationDialog(BuildContext context, String message) {
@@ -2573,7 +2601,7 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
       onTap: () {
         Navigator.pop(context);
         setState(() => activityType = value); // 🆕 lưu loại
-        _showPickTime();                       // sau đó chọn thời gian
+        _selectTime("Bây giờ");                // ✅ bỏ chọn giờ, luôn là "Ngay bây giờ"
       },
       child: Container(
         width: double.infinity,
@@ -2695,10 +2723,6 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
               ),
               const SizedBox(height: 12),
               _timeOption("🔥 Ngay bây giờ",     "Bây giờ"),
-              _timeOption("🌅 Buổi trưa (11h-13h)", "Buổi trưa"),
-              _timeOption("🌆 Buổi chiều (15h-18h)", "Buổi chiều"),
-              _timeOption("🌙 Buổi tối (18h-22h)",  "Buổi tối"),
-              _timeOption("🌃 Khuya (22h+)",        "Khuya"),
               const SizedBox(height: 10),
             ],
           ),
@@ -2755,8 +2779,6 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
       findingUsers = null;
       loadingFinding = true;
     });
-
-    Navigator.pop(context);
 
     final ok = await findingKeoOn();
     if (!mounted) return;
@@ -3051,11 +3073,15 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
                             IconButton(
                               icon: const Icon(Icons.notifications, color: Colors.white),
                               onPressed: () {
-                                unreadNotiVN.value = 0; // đánh dấu đã xem
                                 Navigator.push(
                                   context,
                                   MaterialPageRoute(builder: (_) => const NotificationPage()),
-                                );
+                                ).then((_) {
+                                  // Đồng bộ lại badge với số thông báo THỰC SỰ
+                                  // chưa đọc (người dùng có thể chỉ đọc vài cái
+                                  // trong trang Thông báo chứ không phải hết).
+                                  unreadNotiVN.value = NotificationStore.unreadCount.value;
+                                });
                               },
                             ),
                             if (value > 0)

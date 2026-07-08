@@ -8,6 +8,8 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 
 import 'helpers/lifecycle_tracker.dart';
+import 'helpers/user_helper.dart';
+import 'config/app_config.dart';
 import 'services/global_call_service.dart';
 import 'services/presence_service.dart';
 import 'app_globals.dart';
@@ -20,6 +22,7 @@ import 'pages/create_invite_page.dart';
 import 'pages/splash_page.dart';
 import 'pages/product_detail_page.dart';
 import 'pages/chat_page.dart';
+import 'pages/group_chat_page.dart';
 import 'pages/notification_store.dart';
 
 // ---------------- GLOBAL STATE ----------------
@@ -27,6 +30,7 @@ import 'pages/notification_store.dart';
 final ValueNotifier<int> unreadNotiVN = ValueNotifier<int>(0);
 
 String? pendingKeoId;
+Map<String, dynamic>? _pendingGroupChatData; // lưu FCM group-chat khi app bị terminated
 Map<String, dynamic>? _pendingCallData; // lưu FCM call khi app bị terminated
 OverlayEntry? _appNotificationOverlay;
 Timer? _notificationDismissTimer;
@@ -34,7 +38,7 @@ Timer? _notificationDismissTimer;
 class WooCommerceConfig {
   static const consumerKey = 'ck_3809ad31dd47ca7d10573e35ccdf746494b305a9';
   static const consumerSecret = 'cs_a49b903ddc7972646359f360d79343cd1e33b6f8';
-  static const productsUrl = 'https://spiritwebs.com/wp-json/wc/v3/products';
+  static const productsUrl = '${AppConfig.webDomain}/wp-json/wc/v3/products';
 }
 
 // ---------------- FIREBASE BACKGROUND HANDLER ----------------
@@ -66,18 +70,75 @@ void _handleCallPayload(Map<String, dynamic> data) {
 
 // ---------------- OPEN CHAT / INVITE ----------------
 
-Future<void> _openChatFromData(Map<String, dynamic> data) async {
+class _ResolvedUser {
+  final int id;
+  final String username;
+  const _ResolvedUser(this.id, this.username);
+}
+
+/// Xác định "mình là ai" để mở trang chat/nhóm khi bấm 1 thông báo.
+/// Ưu tiên đọc từ cache local (đã lưu sẵn lúc app khởi động — xem
+/// MainPage._bootstrap) để KHÔNG phụ thuộc mạng ngay lúc bấm, tránh
+/// bị timeout như fetchMe() hay gặp. Chỉ gọi API /me khi cache trống.
+Future<_ResolvedUser?> _resolveCurrentUser() async {
   try {
-    final senderId = int.tryParse(data['sender_id'] ?? '0') ?? 0;
-    final senderName = data['sender_username'] ?? 'Người dùng';
+    final cached = await UserHelper.getCurrentUser();
+    final cachedId = int.tryParse(cached['id']?.toString() ?? '') ?? 0;
+    if (cachedId > 0) {
+      final name = (cached['username'] ?? cached['display_name'] ?? '').toString();
+      return _ResolvedUser(cachedId, name);
+    }
+  } catch (e) {
+    debugPrint("⚠️ _resolveCurrentUser: đọc cache local lỗi $e");
+  }
 
-    final me = await fetchMe();
-    if (me == null) return;
+  // Fallback: cache trống (chưa từng bootstrap) -> thử gọi mạng,
+  // nhưng giới hạn thời gian ngắn hơn để tránh treo UI quá lâu.
+  try {
+    final me = await fetchMe().timeout(const Duration(seconds: 8));
+    if (me != null) {
+      final id = int.tryParse(me['id'].toString()) ?? 0;
+      if (id > 0) {
+        final name = (me['username'] ?? me['display_name'] ?? '').toString();
+        return _ResolvedUser(id, name);
+      }
+    }
+  } catch (e) {
+    debugPrint("⚠️ _resolveCurrentUser: fetchMe() lỗi/timeout $e");
+  }
 
-    final myId = int.tryParse(me['id'].toString()) ?? 0;
-    final myUsername = me['username'] ?? '';
+  return null;
+}
 
-    navigatorKey.currentState?.push(
+/// Trả về true nếu điều hướng thành công, false nếu có lỗi (mất mạng,
+/// chưa đăng nhập, thiếu dữ liệu...) — để UI (vd NotificationPage) có thể
+/// báo cho người dùng biết thay vì im lặng không làm gì.
+Future<bool> _openChatFromData(Map<String, dynamic> data) async {
+  try {
+    final senderIdRaw = data['sender_id']?.toString();
+    final senderId = int.tryParse(senderIdRaw ?? '') ?? 0;
+    if (senderId == 0) {
+      debugPrint("⚠️ openChat: thiếu/không hợp lệ sender_id trong data=$data");
+      return false;
+    }
+    final senderName = data['sender_username']?.toString() ?? 'Người dùng';
+
+    final me = await _resolveCurrentUser();
+    if (me == null) {
+      debugPrint("⚠️ openChat: không xác định được user hiện tại (cache trống + fetchMe lỗi/timeout)");
+      return false;
+    }
+
+    final myId = me.id;
+    final myUsername = me.username;
+
+    final nav = navigatorKey.currentState;
+    if (nav == null) {
+      debugPrint("⚠️ openChat: navigatorKey.currentState null");
+      return false;
+    }
+
+    nav.push(
       MaterialPageRoute(
         builder: (_) => ChatPage(
           userId: myId,
@@ -87,16 +148,75 @@ Future<void> _openChatFromData(Map<String, dynamic> data) async {
         ),
       ),
     );
+    return true;
   } catch (e) {
-    debugPrint("Open chat error: $e");
+    debugPrint("❌ Open chat error: $e");
+    return false;
   }
 }
 
 Future<void> openChatFromNotification(RemoteMessage message) =>
     _openChatFromData(message.data);
 
-Future<void> openChatFromData(Map<String, dynamic> data) =>
+Future<bool> openChatFromData(Map<String, dynamic> data) =>
     _openChatFromData(data);
+
+// ---------------- OPEN GROUP CHAT ----------------
+
+/// Mở đúng phòng chat nhóm khi bấm vào thông báo "group_chat_message"
+/// (xem lib/phoenix_socket/notifications.ex -> send_new_group_chat_notification,
+/// data gửi kèm: group_id, sender_id, sender_name, message).
+Future<bool> _openGroupChatFromData(Map<String, dynamic> data) async {
+  try {
+    final groupId = int.tryParse(data['group_id']?.toString() ?? '') ?? 0;
+    if (groupId == 0) {
+      debugPrint("⚠️ openGroupChat: thiếu/không hợp lệ group_id trong data=$data");
+      return false;
+    }
+
+    final me = await _resolveCurrentUser();
+    if (me == null) {
+      debugPrint("⚠️ openGroupChat: không xác định được user hiện tại (cache trống + fetchMe lỗi/timeout)");
+      return false;
+    }
+
+    final myId = me.id;
+    final myUsername = me.username;
+
+    // Tên nhóm không được gửi kèm trong payload FCM, dùng tên người gửi
+    // làm tiêu đề tạm — GroupChatPage sẽ tự đồng bộ lại tên/avatar nhóm
+    // thật khi tải dữ liệu.
+    final fallbackGroupName =
+        data['group_name']?.toString() ?? data['sender_name']?.toString() ?? 'Nhóm chat';
+
+    final nav = navigatorKey.currentState;
+    if (nav == null) {
+      debugPrint("⚠️ openGroupChat: navigatorKey.currentState null");
+      return false;
+    }
+
+    nav.push(
+      MaterialPageRoute(
+        builder: (_) => GroupChatPage(
+          userId: myId,
+          username: myUsername,
+          groupId: groupId,
+          groupName: fallbackGroupName,
+        ),
+      ),
+    );
+    return true;
+  } catch (e) {
+    debugPrint("❌ Open group chat error: $e");
+    return false;
+  }
+}
+
+Future<void> openGroupChatFromNotification(RemoteMessage message) =>
+    _openGroupChatFromData(message.data);
+
+Future<bool> openGroupChatFromData(Map<String, dynamic> data) =>
+    _openGroupChatFromData(data);
 
 // ---------------- ENTRY POINT ----------------
 
@@ -132,21 +252,38 @@ Future<Map<String, dynamic>?> _fetchProductById(String productId) async {
   }
 }
 
-Future<void> _navigateToInvite(String keoId) async {
+Future<bool> _navigateToInvite(String keoId) async {
+  if (keoId.trim().isEmpty) {
+    debugPrint("⚠️ openInvite: keoId rỗng");
+    return false;
+  }
+
   final product = await _fetchProductById(keoId);
-  if (product == null) return;
-  navigatorKey.currentState?.push(
+  if (product == null) {
+    debugPrint("⚠️ openInvite: không fetch được sản phẩm keoId=$keoId "
+        "(có thể đã bị xoá / mất mạng / sai id)");
+    return false;
+  }
+
+  final nav = navigatorKey.currentState;
+  if (nav == null) {
+    debugPrint("⚠️ openInvite: navigatorKey.currentState null");
+    return false;
+  }
+
+  nav.push(
     MaterialPageRoute(builder: (_) => ProductDetailPage(product: product)),
   );
+  return true;
 }
 
 Future<void> openInviteFromNotification(RemoteMessage message) async {
-  final keoId = message.data['keo_id'];
+  final keoId = message.data['keo_id'] ?? message.data['product_id'];
   if (keoId == null) return;
   await _navigateToInvite(keoId);
 }
 
-Future<void> openInviteById(String keoId) => _navigateToInvite(keoId);
+Future<bool> openInviteById(String keoId) => _navigateToInvite(keoId);
 
 // ---------------- IN-APP NOTIFICATION BANNER ----------------
 
@@ -291,7 +428,17 @@ Future<void> setupFirebaseMessaging() async {
     final isViewingSameGroup =
         isGroupChatPageOpen && currentGroupChatId != null && currentGroupChatId == groupId;
 
-    if (!isChattingWithSender && !isViewingSameGroup) {
+    // ✅ Không hiện banner nếu đang mở đúng trang chi tiết kèo (invite) —
+    // trang đó đã tự hiện SnackBar realtime qua socket rồi (xem
+    // product_detail_page.dart -> _showInviteNotification).
+    final inviteIdFromData = int.tryParse(message.data['invite_id'] ?? '') ?? -1;
+    const inviteEventTypes = {'user_joined', 'user_left', 'user_kicked'};
+    final isViewingSameInvite = inviteEventTypes.contains(type) &&
+        isInviteDetailOpen &&
+        currentInviteId != null &&
+        currentInviteId == inviteIdFromData;
+
+    if (!isChattingWithSender && !isViewingSameGroup && !isViewingSameInvite) {
       showAppNotification(title: title, body: body);
     }
   });
@@ -302,10 +449,14 @@ Future<void> setupFirebaseMessaging() async {
     final type = message.data['type'];
     if (type == 'video_call') {
       _handleCallPayload(message.data);
-    } else if (type == 'invite_keo') {
+    } else if (type == 'invite_keo' || type == 'new_product') {
       openInviteFromNotification(message);
     } else if (type == 'chat_message') {
       openChatFromNotification(message);
+    } else if (type == 'group_chat_message') {
+      openGroupChatFromNotification(message);
+    } else if (type == 'user_joined' || type == 'user_left' || type == 'user_kicked') {
+      openInviteFromNotification(message); // dùng chung keo_id -> mở đúng trang chi tiết
     }
   });
 
@@ -316,13 +467,18 @@ Future<void> setupFirebaseMessaging() async {
     if (type == 'video_call') {
       // Lưu lại, xử lý sau khi navigator sẵn sàng (MainPage._openPendingCall)
       _pendingCallData = initialMessage.data;
-    } else if (type == 'invite_keo') {
+    } else if (type == 'invite_keo' || type == 'new_product') {
+      pendingKeoId = initialMessage.data['keo_id'] ?? initialMessage.data['product_id'];
+    } else if (type == 'user_joined' || type == 'user_left' || type == 'user_kicked') {
       pendingKeoId = initialMessage.data['keo_id'];
     } else if (type == 'chat_message') {
       Future.delayed(
         const Duration(seconds: 1),
             () => openChatFromNotification(initialMessage),
       );
+    } else if (type == 'group_chat_message') {
+      // Lưu lại, xử lý sau khi navigator sẵn sàng (MainPage._openPendingGroupChat)
+      _pendingGroupChatData = initialMessage.data;
     }
   }
 }
@@ -436,6 +592,7 @@ class _MainPageState extends State<MainPage>
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _openPendingInvite();
+      _openPendingGroupChat();
       _openPendingCall();
     });
   }
@@ -511,6 +668,15 @@ class _MainPageState extends State<MainPage>
     pendingKeoId = null;
     await Future.delayed(const Duration(milliseconds: 500));
     openInviteById(id);
+  }
+
+  /// Xử lý tap vào thông báo chat nhóm khi app vừa mở từ terminated state.
+  Future<void> _openPendingGroupChat() async {
+    if (_pendingGroupChatData == null) return;
+    final data = _pendingGroupChatData!;
+    _pendingGroupChatData = null;
+    await Future.delayed(const Duration(milliseconds: 500));
+    openGroupChatFromData(data);
   }
 
   /// Xử lý cuộc gọi đến khi app vừa mở từ terminated state.
