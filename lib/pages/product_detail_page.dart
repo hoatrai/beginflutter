@@ -832,9 +832,12 @@ class _ProductDetailPageState extends State<ProductDetailPage>
           }).toList();
         });
         await _fetchParticipants(inviteId!);
+      } else {
+        _showSnack('❌ ${data['message'] ?? 'Đánh giá thất bại'}');
       }
     } catch (e) {
       debugPrint('❌ _rateUser: $e');
+      _showSnack('❌ Lỗi kết nối, thử lại sau');
     }
   }
 
@@ -1831,7 +1834,10 @@ class _ProductDetailPageState extends State<ProductDetailPage>
           title: '⭐ Đánh giá thành viên',
           scrollController: controller,
           children: [
-            ..._participants.map((p) => _RatingTile(
+            // 🔥 Không hiện chính mình trong danh sách được đánh giá
+            ..._participants
+                .where((p) => p.userId != _currentUserId)
+                .map((p) => _RatingTile(
               participant: p,
               onRate: (point) async {
                 await _rateUser(p.userId, point);
