@@ -8,6 +8,7 @@ import '../main.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:shimmer/shimmer.dart' as shimmer;
 import '../config/app_config.dart';
+import 'forgot_password_page.dart';
 
 
 
@@ -257,7 +258,24 @@ class _LoginPageState extends State<LoginPage> {
                       ),
                     ),
                   ),
-                  const SizedBox(height: 20),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: TextButton(
+                      onPressed: _loading
+                          ? null
+                          : () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(builder: (_) => const ForgotPasswordPage()),
+                        );
+                      },
+                      child: const Text(
+                        "Quên mật khẩu?",
+                        style: TextStyle(color: Colors.white70),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 4),
                   if (_errorMessage != null)
                     Text(_errorMessage!, style: const TextStyle(color: Colors.red)),
                   const SizedBox(height: 20),

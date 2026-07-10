@@ -7,4 +7,12 @@ class AppConfig {
 
   static const String apiUrl = '$webDomain/wp-json';
   static const String socketApi = '$socketDomain/api';
+
+  // 🆕 Yêu cầu bắt buộc của App Store/Play Store: phải có trang
+  // Chính sách bảo mật & Điều khoản sử dụng truy cập được trong app.
+  // TODO: đổi thành đúng URL trang thật trên WordPress (tạo 2 page
+  // "Chính sách bảo mật" / "Điều khoản sử dụng" trên $webDomain rồi dán
+  // slug vào đây).
+  static const String privacyPolicyUrl = '$webDomain/chinh-sach-bao-mat';
+  static const String termsOfServiceUrl = '$webDomain/dieu-khoan-su-dung';
 }

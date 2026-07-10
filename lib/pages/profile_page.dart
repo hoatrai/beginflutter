@@ -6,6 +6,7 @@ import 'login_page.dart';
 import '../helpers/storage_helper.dart';
 import 'edit_profile_page.dart';
 import 'package:shimmer/shimmer.dart' as shimmer;
+import 'package:url_launcher/url_launcher.dart';
 import '../config/app_config.dart';
 
 
@@ -200,11 +201,119 @@ class _ProfilePageState extends State<ProfilePage> {
   }
 
   Future<void> _logout() async {
+    // 🆕 Trước đây hàm này chỉ chuyển màn hình mà KHÔNG xóa token/dữ liệu
+    // local -> đăng xuất xong app vẫn coi như còn đăng nhập ở nhiều chỗ
+    // (vd sinh trắc học). Phải clear hết secure storage khi đăng xuất.
+    await StorageHelper.clear();
     if (!mounted) return;
     Navigator.pushReplacement(
       context,
       MaterialPageRoute(builder: (_) => const LoginPage()),
     );
+  }
+
+  Future<void> _openUrl(String url) async {
+    final uri = Uri.parse(url);
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    } else if (mounted) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text("Không thể mở liên kết")));
+    }
+  }
+
+  /// 🆕 Xóa tài khoản — yêu cầu bắt buộc của App Store/Play Store
+  /// (Apple Guideline 5.1.1(v), Google Play Data Safety): app có tài
+  /// khoản phải cho user tự xóa tài khoản ngay trong app, không được
+  /// bắt liên hệ hỗ trợ/email thủ công.
+  Future<void> _confirmAndDeleteAccount() async {
+    // Bước 1: cảnh báo rõ ràng đây là hành động không thể hoàn tác.
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text("Xóa tài khoản vĩnh viễn?"),
+        content: const Text(
+          "Toàn bộ dữ liệu tài khoản, kèo, tin nhắn liên kết sẽ bị xóa và "
+              "KHÔNG THỂ khôi phục. Bạn có chắc chắn muốn tiếp tục?",
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text("Hủy"),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text("Xóa vĩnh viễn", style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true || !mounted) return;
+
+    // Bước 2: bắt nhập lại mật khẩu để xác nhận đúng là chủ tài khoản
+    // (phòng trường hợp JWT còn hạn bị lộ/thiết bị bị người khác cầm).
+    final passwordController = TextEditingController();
+    final password = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text("Xác nhận mật khẩu"),
+        content: TextField(
+          controller: passwordController,
+          obscureText: true,
+          decoration: const InputDecoration(labelText: "Nhập mật khẩu hiện tại"),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, null),
+            child: const Text("Hủy"),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, passwordController.text),
+            child: const Text("Xác nhận"),
+          ),
+        ],
+      ),
+    );
+
+    if (password == null || password.isEmpty || !mounted) return;
+
+    setState(() => _loading = true);
+
+    try {
+      final token = await StorageHelper.read("jwt_token");
+      final response = await http.post(
+        Uri.parse("${AppConfig.webDomain}/wp-json/nhau/v1/delete-account"),
+        headers: {
+          'Content-Type': 'application/json',
+          if (token != null) 'Authorization': 'Bearer $token',
+        },
+        body: jsonEncode({"password": password}),
+      );
+
+      final data = jsonDecode(response.body);
+
+      if (response.statusCode == 200) {
+        await StorageHelper.clear();
+        if (!mounted) return;
+        Navigator.pushAndRemoveUntil(
+          context,
+          MaterialPageRoute(builder: (_) => const LoginPage()),
+              (route) => false,
+        );
+        return;
+      } else {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(data['message']?.toString() ?? "❌ Không thể xóa tài khoản"),
+        ));
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("⚠️ Lỗi kết nối: $e")));
+    }
+
+    if (mounted) setState(() => _loading = false);
   }
 
   Widget _buildSkeletonProfile() {
@@ -407,6 +516,44 @@ class _ProfilePageState extends State<ProfilePage> {
               ],
             ),
           ),
+          const SizedBox(height: 16),
+
+          // 🆕 Chính sách bảo mật / Điều khoản sử dụng — bắt buộc phải
+          // truy cập được trong app theo yêu cầu của App Store/Play Store.
+          Container(
+            margin: const EdgeInsets.symmetric(horizontal: 32),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                TextButton(
+                  onPressed: () => _openUrl(AppConfig.privacyPolicyUrl),
+                  child: const Text("Chính sách bảo mật", style: TextStyle(color: Colors.white70)),
+                ),
+                const Text("•", style: TextStyle(color: Colors.white38)),
+                TextButton(
+                  onPressed: () => _openUrl(AppConfig.termsOfServiceUrl),
+                  child: const Text("Điều khoản sử dụng", style: TextStyle(color: Colors.white70)),
+                ),
+              ],
+            ),
+          ),
+
+          // 🆕 Xóa tài khoản — tách riêng, màu đỏ cảnh báo, không để chung
+          // hàng với các action thường để tránh bấm nhầm.
+          Container(
+            margin: const EdgeInsets.symmetric(horizontal: 32),
+            child: OutlinedButton.icon(
+              onPressed: _loading ? null : _confirmAndDeleteAccount,
+              style: OutlinedButton.styleFrom(
+                minimumSize: const Size.fromHeight(48),
+                foregroundColor: Colors.redAccent,
+                side: const BorderSide(color: Colors.redAccent),
+              ),
+              icon: const Icon(Icons.delete_forever),
+              label: const Text("Xóa tài khoản"),
+            ),
+          ),
+
           const SizedBox(height: 20),
         ],
       ),
