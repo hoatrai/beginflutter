@@ -3,6 +3,7 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'dart:async';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:web_socket_channel/status.dart' as status;
 import 'package:geolocator/geolocator.dart';
@@ -15,10 +16,11 @@ import 'chat_list_page.dart';
 import 'user_info_page.dart';
 import 'my_keo_page.dart';
 import 'create_invite_page.dart';
-import '../main.dart' show unreadNotiVN;
+import '../main.dart' show unreadNotiVN, activeTabIndexVN;
 import 'notification_page.dart';
 import 'notification_store.dart';
 import '../config/app_config.dart';
+import '../services/location_permission_gate.dart';
 
 //import 'chat_page_phoenix.dart';
 import 'chat_page.dart';
@@ -47,13 +49,12 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
   bool sendingInvite = false;
   bool isOpeningLocation = false;
   bool isShowingLocationDialog = false;
-  // 🔧 FIX: dedupe xin quyền vị trí — trước đây _requestLocationOnFirstLoad()
-  // (chạy khi vào trang) và fetchNearbyFindingUsers() -> ensureLocationPermission()
-  // (tự chạy nếu trước đó đang "tìm kèo") không được await cùng nhau nên có
-  // thể CÙNG LÚC gọi Geolocator.requestPermission()/openLocationSettings(),
-  // gây ra 2 popup xin bật định vị chồng lên nhau. Dùng 1 Future dùng chung
-  // để lệnh gọi thứ 2 chờ kết quả của lệnh gọi thứ 1 thay vì tự bắn riêng.
-  Future<bool>? _locationPermissionInFlight;
+  // 🔧 FIX 2 popup "bật định vị" chồng nhau: việc dedupe request vị trí
+  // giờ nằm ở `LocationPermissionGate` (dùng chung toàn app, xem
+  // services/location_permission_gate.dart) thay vì Future riêng ở đây,
+  // vì bug thật sự xảy ra GIỮA ShopPage và PresenceService (2 nơi khác
+  // nhau cùng xin quyền lúc app khởi động), không chỉ trong nội bộ trang
+  // này.
   bool justReturnedFromSettings = false;
   bool isUserScrolling = false;
   Timer? autoScrollTimer;
@@ -115,6 +116,9 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
     _elapsedTimer = Timer.periodic(const Duration(minutes: 1), (_) {
       debugPrint("⏱️ Timer tick! isFindingKeo=$isFindingKeo _startedAt=$_startedAt mounted=$mounted");  // 🆕
       if (!mounted) return;
+      // 🚀 Tab Shop đang bị ẩn (người dùng ở tab khác) → khỏi setState,
+      // tránh rebuild cây widget không cần thiết cho 1 trang không hiển thị.
+      if (activeTabIndexVN.value != 0) return;
       if (isFindingKeo && _startedAt != null) {
         setState(() {
           elapsedMinutes = DateTime.now().difference(_startedAt!).inMinutes;
@@ -134,6 +138,12 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
           (timer) {
 
         if (!mounted) return;
+
+        // 🚀 Đang ở tab khác (Map/Group/Profile...) → khỏi jumpTo(), tránh
+        // ép layout lại ListView 60 lần/giây cho 1 trang không hiển thị.
+        // IndexedStack giữ nguyên state ShopPage nên Timer vẫn chạy nền
+        // nếu không chặn ở đây.
+        if (activeTabIndexVN.value != 0) return;
 
         if (!_findingScrollController.hasClients) {
           return;
@@ -381,7 +391,7 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
   Future<void> _requestLocationOnFirstLoad() async {
     try {
       final granted =
-          await _requestLocationPermissionShared(openSettingsDirectly: false);
+      await _requestLocationPermissionShared(openSettingsDirectly: false);
       if (granted) _resolveMyLocationSilent();
     } catch (e) {
       debugPrint("⚠️ _requestLocationOnFirstLoad: $e");
@@ -390,16 +400,11 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
 
   Future<void> _resolveMyLocationSilent() async {
     try {
+      // Quyền đã được xác nhận `granted` bởi caller (_requestLocationOnFirstLoad
+      // -> LocationPermissionGate) — không check/requestPermission lại ở đây
+      // nữa để tránh gọi Geolocator dư thừa.
       final serviceOn = await Geolocator.isLocationServiceEnabled();
       if (!serviceOn) return;
-
-      LocationPermission permission = await Geolocator.checkPermission();
-      if (permission == LocationPermission.denied) {
-        permission = await Geolocator.requestPermission();
-      }
-      if (permission == LocationPermission.deniedForever) return;
-      if (permission != LocationPermission.whileInUse &&
-          permission != LocationPermission.always) return;
 
       final lastKnown = await Geolocator.getLastKnownPosition();
       if (lastKnown != null) {
@@ -817,10 +822,13 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
     return _requestLocationPermissionShared(openSettingsDirectly: true);
   }
 
-  /// Lõi xin quyền vị trí DÙNG CHUNG cho mọi nơi trong trang — chỉ chạy
-  /// 1 request tại 1 thời điểm (xem `_locationPermissionInFlight` ở khai
-  /// báo field), tránh 2 popup xin bật định vị chồng lên nhau khi nhiều
-  /// luồng cùng cần quyền vị trí lúc mới vào trang.
+  /// Lõi xin quyền vị trí DÙNG CHUNG cho mọi nơi trong trang — giờ đi qua
+  /// `LocationPermissionGate` dùng chung CHO TOÀN APP (không chỉ riêng
+  /// trang này), vì `PresenceService` cũng cần xin quyền vị trí ngay lúc
+  /// app khởi động (main.dart -> _bootstrap()), gần như cùng lúc với
+  /// trang này. Trước đây mỗi bên tự dedupe riêng nên vẫn bị 2 popup
+  /// "bật định vị" chồng lên nhau — giờ dùng chung 1 cổng nên chỉ còn
+  /// đúng 1 request tại 1 thời điểm cho toàn app.
   ///
   /// [openSettingsDirectly] = true  -> hành vi "bắt buộc" (khi user chủ
   ///   động bấm nút, vd "Bật tìm kèo"): mở thẳng Cài đặt nếu thiếu quyền.
@@ -829,50 +837,14 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
   Future<bool> _requestLocationPermissionShared({
     required bool openSettingsDirectly,
   }) {
-    return _locationPermissionInFlight ??=
-        _doRequestLocationPermission(openSettingsDirectly: openSettingsDirectly);
-  }
-
-  Future<bool> _doRequestLocationPermission({
-    required bool openSettingsDirectly,
-  }) async {
-    try {
-      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
-      if (!serviceEnabled) {
-        if (openSettingsDirectly) {
-          isOpeningLocation = true;
-          await Geolocator.openLocationSettings();
-        } else if (mounted) {
+    return LocationPermissionGate.ensure(
+      openSettingsDirectly: openSettingsDirectly,
+      onNeedGps: () {
+        if (mounted) {
           _showLocationDialog(context, "Vui lòng bật GPS để tìm kèo gần bạn.");
         }
-        return false;
-      }
-
-      LocationPermission permission = await Geolocator.checkPermission();
-      if (permission == LocationPermission.denied) {
-        permission = await Geolocator.requestPermission();
-        if (permission == LocationPermission.denied) return false;
-      }
-
-      if (permission == LocationPermission.deniedForever) {
-        if (openSettingsDirectly) {
-          isOpeningLocation = true;
-          await Geolocator.openAppSettings();
-        } else if (mounted) {
-          _showLocationDialog(
-              context, "Bạn đã tắt quyền vị trí.\nVào Cài đặt để bật lại.");
-        }
-        return false;
-      }
-
-      return permission == LocationPermission.whileInUse ||
-          permission == LocationPermission.always;
-    } finally {
-      // Reset NGAY sau khi xong (không giữ mãi) — lần xin quyền tiếp theo
-      // (vd user bấm lại nút "Bật tìm kèo") vẫn kiểm tra lại bình thường,
-      // chỉ dedupe những request đến CÙNG LÚC.
-      _locationPermissionInFlight = null;
-    }
+      },
+    );
   }
 
   void _showLocationDialog(BuildContext context, String message) {
@@ -1492,6 +1464,10 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
         "${AppConfig.webDomain}/wp-json/wc/v3/products"
             "?status=publish&per_page=10&page=$page"
             "&orderby=date&order=desc"
+        // 🚀 CHỈ lấy field cần dùng ở shop page thay vì cả schema WC
+        // (description, attributes, variations, links...) → JSON nhẹ
+        // hơn đáng kể, parse nhanh hơn, tốn ít băng thông hơn.
+            "&_fields=id,name,price,images,meta_data,categories,date_created"
             "&consumer_key=ck_3809ad31dd47ca7d10573e35ccdf746494b305a9"
             "&consumer_secret=cs_a49b903ddc7972646359f360d79343cd1e33b6f8",
       );
@@ -1833,6 +1809,12 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
                                 width: 44,
                                 height: 44,
                                 fit: BoxFit.cover,
+                                // 🚀 Giới hạn kích thước decode ~2x kích thước
+                                // hiển thị (retina) thay vì decode ảnh full-size
+                                // cho 1 avatar 44x44 → giảm RAM + CPU đáng kể
+                                // khi list có nhiều item.
+                                memCacheWidth: 88,
+                                memCacheHeight: 88,
                                 placeholder: (context, url) =>
                                 const Icon(Icons.person, color: Colors.white70),
                                 errorWidget: (context, url, error) =>
@@ -2443,6 +2425,101 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
     }
   }
 
+  String _removeDiacritics(String str) {
+    const withDia =
+        'àáảãạăằắẳẵặâầấẩẫậèéẻẽẹêềếểễệìíỉĩịòóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵđ'
+        'ÀÁẢÃẠĂẰẮẲẴẶÂẦẤẨẪẬÈÉẺẼẸÊỀẾỂỄỆÌÍỈĨỊÒÓỎÕỌÔỒỐỔỖỘƠỜỚỞỠỢÙÚỦŨỤƯỪỨỬỮỰỲÝỶỸỴĐ';
+    const withoutDia =
+        'aaaaaaaaaaaaaaaaaeeeeeeeeeeeiiiiiooooooooooooooooouuuuuuuuuuuyyyyyd'
+        'AAAAAAAAAAAAAAAAAEEEEEEEEEEEIIIIIOOOOOOOOOOOOOOOOOUUUUUUUUUUUYYYYYD';
+    var result = str;
+    for (int i = 0; i < withDia.length; i++) {
+      result = result.replaceAll(withDia[i], withoutDia[i]);
+    }
+    return result;
+  }
+
+  int _categoryTagPriority(String rawName) {
+    final text = _removeDiacritics(rawName.trim().toLowerCase());
+    if (text.contains('nhau')) return 0;
+    if (text.contains('karaoke')) return 1;
+    if (text.contains('bar') || text.contains('pub')) return 2;
+    if (text.contains('beer')) return 3;
+    return 99;
+  }
+
+  /// 🔗 Chia sẻ 1 kèo ra ngoài app (Zalo, Messenger, SMS, Facebook...) qua
+  /// share sheet của hệ điều hành (share_plus). Vì app hiện chưa có deep
+  /// link mở thẳng đúng kèo cho người CHƯA cài app (chỉ có trang cài app
+  /// chung "/quet-ma"), nội dung share gồm đủ thông tin để người nhận
+  /// biết kèo gì trước khi tải app + link cài app kèm sẵn keo_id (khi nào
+  /// làm deep link/dynamic link thật thì trang /quet-ma chỉ cần đọc query
+  /// keo_id để tự mở đúng kèo sau khi cài xong).
+  Future<void> _shareKeo(Map<String, dynamic> product) async {
+    try {
+      final id = product['id']?.toString() ?? '';
+      final name = (product['name'] ?? 'Kèo nhậu').toString();
+      final meta = product['meta'] ?? {};
+      final time = meta['time']?.toString() ?? '';
+      final pubName = meta['pub_name']?.toString() ?? '';
+      final address = meta['address']?.toString() ?? '';
+
+      final metaData = product['meta_data'] as List? ?? [];
+      final priceRange = metaData.firstWhere(
+            (e) => e['key'] == 'price_range',
+        orElse: () => null,
+      )?['value'];
+      String priceText;
+      switch (priceRange) {
+        case null:
+        case '0':
+          priceText = "Miễn phí";
+          break;
+        case '50-100':
+          priceText = "50k - 100k";
+          break;
+        case '100-200':
+          priceText = "100k - 200k/Người";
+          break;
+        case '200-500':
+          priceText = "200k - 500k/Người";
+          break;
+        case '500+':
+          priceText = "500k+/Người";
+          break;
+        default:
+          priceText = "$priceRange";
+      }
+
+      final link = "${AppConfig.webDomain}/quet-ma?keo_id=$id";
+
+      final buffer = StringBuffer()
+        ..writeln("🍻 $name")
+        ..writeln();
+      if (pubName.isNotEmpty) buffer.writeln("📍 $pubName${address.isNotEmpty ? ' - $address' : ''}");
+      if (time.isNotEmpty) buffer.writeln("🕒 $time");
+      buffer.writeln("💰 $priceText");
+      buffer.writeln();
+      buffer.writeln("Tham gia kèo cùng mình nè 👇");
+      buffer.writeln(link);
+
+      final box = context.findRenderObject() as RenderBox?;
+      await Share.share(
+        buffer.toString(),
+        subject: name,
+        sharePositionOrigin:
+        box != null ? (box.localToGlobal(Offset.zero) & box.size) : null,
+      );
+    } catch (e) {
+      debugPrint("❌ _shareKeo: $e");
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Không thể chia sẻ kèo này, thử lại sau.")),
+        );
+      }
+    }
+  }
+
   Future<void> _confirmDelete(BuildContext context, int productId) async {
     final result = await showDialog<bool>(
       context: context,
@@ -2823,6 +2900,19 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
     );
   }
 
+  // 🎨 Màu theo thể loại — cùng nhóm giá trị với filter bar (🍺 Nhậu,
+  // 🎤 Karaoke, 🍸 Bar/Pub, 🍻 Beer Club). categoryNames có thể là chuỗi
+  // gộp nhiều category ("Nhậu, Karaoke") nên match theo "chứa" thay vì so
+  // khớp tuyệt đối; ưu tiên theo thứ tự liệt kê bên dưới khi có nhiều match.
+  Color _getCategoryColor(String text) {
+    final lower = text.toLowerCase();
+    if (lower.contains('karaoke')) return Colors.orange;
+    if (lower.contains('beer')) return const Color(0xFFFF7043); // cam san hô, ấm hơn vàng
+    if (lower.contains('nhậu')) return Colors.lightGreen;
+    if (lower.contains('bar') || lower.contains('pub')) return Colors.cyan;
+    return Colors.white70;
+  }
+
   Future<void> fetchParticipantAvatars(List<String> ids) async {
     final uniqueIds = ids
         .where((id) => !_fetchingAvatarIds.contains(id))
@@ -2892,26 +2982,101 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
     });
   }
 
-  // 🔧 FIX: thêm stagger nhẹ giữa các request để tránh bắn quá nhiều
-  // request invite-status cùng lúc (giảm áp lực server + cảm giác giật/chậm
-  // trên máy yếu). Đây là fix tạm thời ở client; cách sửa triệt để vẫn là
-  // thêm 1 API backend nhận nhiều product_id và trả kết quả 1 lần.
+  // 🚀 FIX TRIỆT ĐỂ: thay vì bắn N request riêng lẻ (có stagger 60ms/request
+  // như trước — với 10 sản phẩm là 10 round-trip + 30 query SQL), giờ gom
+  // hết productId cần lấy status lại và gọi backend đúng 1 lần duy nhất
+  // qua endpoint bulk /invite/by-products (2-3 query SQL cho cả trang).
   void preloadInviteStatuses() {
-    int delayMs = 0;
-    const stagger = 60; // mỗi request cách nhau 60ms
-
+    final ids = <int>[];
     for (final product in products) {
       final int productId = int.tryParse(product['id'].toString()) ?? 0;
       if (productId != 0 && !inviteStatusMap.containsKey(productId)) {
         inviteStatusMap[productId] = null;
-
-        Future.delayed(Duration(milliseconds: delayMs), () {
-          if (!mounted) return;
-          fetchInviteStatus(productId);
-        });
-
-        delayMs += stagger;
+        ids.add(productId);
       }
+    }
+    if (ids.isEmpty) return;
+    fetchInviteStatusesBulk(ids);
+  }
+
+  /// Lấy invite-status cho NHIỀU sản phẩm cùng lúc trong 1 request.
+  /// Thay thế cho việc gọi fetchInviteStatus() N lần.
+  Future<void> fetchInviteStatusesBulk(List<int> productIds) async {
+    if (productIds.isEmpty) return;
+
+    try {
+      final token = await StorageHelper.read("jwt_token") ?? "";
+      final idsParam = productIds.join(',');
+
+      final res = await http
+          .get(
+        Uri.parse(
+          "${AppConfig.webDomain}/wp-json/nhau/v1/invite/by-products?ids=$idsParam",
+        ),
+        headers: {
+          "Authorization": "Bearer $token",
+          "Content-Type": "application/json",
+        },
+      )
+          .timeout(const Duration(seconds: 15));
+
+      if (res.statusCode != 200) {
+        throw Exception("HTTP ${res.statusCode}");
+      }
+
+      final decoded = jsonDecode(res.body);
+      if (decoded['success'] != true) return;
+
+      final Map<String, dynamic> data = decoded['data'] ?? {};
+      final Set<int> closedProductIds = {};
+
+      for (final idStr in data.keys) {
+        final productId = int.tryParse(idStr);
+        if (productId == null) continue;
+
+        final item = data[idStr];
+
+        final invite = InviteStatus(
+          isJoined: item['is_joined'] == true,
+          isFull: item['is_full'] == true,
+          status: item['status']?.toString() ?? "",
+          joinedCount: int.tryParse(item['joined_count']?.toString() ?? "0") ?? 0,
+          maxPeople: int.tryParse(item['max_people']?.toString() ?? "0") ?? 0,
+        );
+
+        inviteStatusMap[productId] = invite;
+
+        final bool isClosed = invite.isFull ||
+            invite.status == "closed" ||
+            invite.status == "full" ||
+            invite.status == "done";
+
+        if (isClosed) closedProductIds.add(productId);
+      }
+
+      if (!mounted) return;
+      setState(() {
+        if (closedProductIds.isNotEmpty) {
+          products.removeWhere((p) => closedProductIds.contains(p['id']));
+          for (final id in closedProductIds) {
+            inviteStatusMap.remove(id);
+          }
+        }
+      });
+    } catch (e) {
+      debugPrint("🔴 fetchInviteStatusesBulk error: $e");
+      // Fallback: nếu bulk lỗi (vd backend chưa deploy endpoint mới),
+      // vẫn đảm bảo UI không bị treo badge — set trạng thái lỗi nhẹ.
+      for (final id in productIds) {
+        inviteStatusMap[id] ??= InviteStatus(
+          isJoined: false,
+          isFull: false,
+          status: "error",
+          joinedCount: 0,
+          maxPeople: 0,
+        );
+      }
+      if (mounted) setState(() {});
     }
   }
 
@@ -2970,7 +3135,13 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
               child: CircleAvatar(
                 radius: 13,
                 backgroundImage: creatorAvatar.isNotEmpty
-                    ? CachedNetworkImageProvider(creatorAvatar)
+                    ? CachedNetworkImageProvider(
+                  creatorAvatar,
+                  // 🚀 avatar hiển thị ~26x26 (radius 13) → không cần
+                  // decode ảnh full-size, giới hạn ~52px (x2 cho retina)
+                  maxWidth: 52,
+                  maxHeight: 52,
+                )
                     : null,
                 child: creatorAvatar.isEmpty
                     ? const Icon(Icons.person, size: 13)
@@ -3250,7 +3421,7 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
                           final String creatorName = product['creatorName'] ?? '...';
                           final String pubName = meta['pub_name']?.toString() ?? "Ẩn danh";
                           final address = meta['address']?.toString() ?? '';
-                          final categories = product['category_names'] ?? '';
+                          final categories = (product['category_names'] ?? '').toString();
 
                           final metaData = product['meta_data'] as List? ?? [];
 
@@ -3393,7 +3564,7 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
                                           height: 32,
                                           child: ElevatedButton(
                                             style: ElevatedButton.styleFrom(
-                                              backgroundColor: Colors.orange,
+                                              backgroundColor: _getCategoryColor(categories),
                                               shape: RoundedRectangleBorder(
                                                 borderRadius: BorderRadius.circular(6),
                                               ),
@@ -3475,20 +3646,18 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
                                           Wrap(
                                             spacing: 6,
                                             runSpacing: 6,
-                                            children: categories.split(',').map<Widget>((item) {
-                                              final text = item.trim().toLowerCase();
-                                              Color color = Colors.orangeAccent;
-                                              if (text.contains('karaoke')) {
-                                                color = Colors.orange;
-                                              } else if (text.contains('nhậu')) {
-                                                color = Colors.yellow;
-                                              } else if (text.contains('beer')) {
-                                                color = Colors.lightGreen;
-                                              } else if (text.contains('bar')) {
-                                                color = Colors.cyan;
-                                              } else {
-                                                color = Colors.white70;
-                                              }
+                                            children: (categories.split(',')
+                                                .map((e) => e.trim())
+                                                .where((e) => e.isNotEmpty)
+                                                .toList()
+                                              ..sort((a, b) {
+                                                final pa = _categoryTagPriority(a);
+                                                final pb = _categoryTagPriority(b);
+                                                if (pa != pb) return pa.compareTo(pb);
+                                                return a.toLowerCase().compareTo(b.toLowerCase());
+                                              }))
+                                                .map<Widget>((item) {
+                                              final color = _getCategoryColor(item);
                                               return Container(
                                                 padding: const EdgeInsets.symmetric(
                                                     horizontal: 8, vertical: 4),
@@ -3549,7 +3718,7 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
                                           const SizedBox(height: 4),
                                           Text("Thời gian: $time",
                                               style: const TextStyle(
-                                                  fontSize: 12, color: Colors.greenAccent)),
+                                                  fontSize: 12, color: Color(0xFF66BB6A))),
                                           const SizedBox(height: 4),
                                           Row(
                                             mainAxisSize: MainAxisSize.min,
@@ -3634,15 +3803,15 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
                                                     ),
                                                     _statChip(
                                                       "⭐ ${userStats?['attendance_percent'] ?? 0}%",
-                                                      Colors.yellow,
+                                                      const Color(0xFF66BB6A),
                                                     ),
                                                     _statChip(
                                                       "🧾 ${userStats?['total_keo'] ?? 0}",
-                                                      Colors.yellow,
+                                                      const Color(0xFF66BB6A),
                                                     ),
                                                     _statChip(
                                                       "🎯 ${userStats?['real_join_percent'] ?? 0}%",
-                                                      Colors.yellow,
+                                                      const Color(0xFF66BB6A),
                                                     ),
                                                   ],
                                                 ),
@@ -3652,89 +3821,126 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
                                         ],
                                       ),
                                     ),
-                                    // DELETE hoặc CHAT button
-                                    myUserId == int.tryParse(creatorId)
-                                        ? Tooltip(
-                                      message: "Xóa",
-                                      child: GestureDetector(
-                                        onTap: () {
-                                          final id = product["id"];
-                                          final int pid = id != null
-                                              ? int.tryParse(id.toString()) ?? 0
-                                              : 0;
-                                          if (pid == 0) return;
-                                          _confirmDelete(context, pid);
-                                        },
-                                        child: Container(
-                                          width: 30,
-                                          height: 30,
-                                          decoration: BoxDecoration(
-                                            gradient: const LinearGradient(
-                                              colors: [
-                                                Color(0xFFE57373),
-                                                Color(0xFFEF5350)
-                                              ],
-                                              begin: Alignment.topLeft,
-                                              end: Alignment.bottomRight,
+                                    // DELETE/CHAT + SHARE button
+                                    Column(
+                                      children: [
+                                        myUserId == int.tryParse(creatorId)
+                                            ? Tooltip(
+                                          message: "Xóa",
+                                          child: GestureDetector(
+                                            onTap: () {
+                                              final id = product["id"];
+                                              final int pid = id != null
+                                                  ? int.tryParse(id.toString()) ?? 0
+                                                  : 0;
+                                              if (pid == 0) return;
+                                              _confirmDelete(context, pid);
+                                            },
+                                            child: Container(
+                                              width: 30,
+                                              height: 30,
+                                              decoration: BoxDecoration(
+                                                gradient: const LinearGradient(
+                                                  colors: [
+                                                    Color(0xFFE57373),
+                                                    Color(0xFFEF5350)
+                                                  ],
+                                                  begin: Alignment.topLeft,
+                                                  end: Alignment.bottomRight,
+                                                ),
+                                                shape: BoxShape.circle,
+                                                boxShadow: [
+                                                  BoxShadow(
+                                                    color: Colors.black.withOpacity(0.3),
+                                                    blurRadius: 6,
+                                                    offset: const Offset(0, 3),
+                                                  ),
+                                                ],
+                                              ),
+                                              child: const Icon(Icons.delete,
+                                                  color: Colors.white, size: 14),
                                             ),
-                                            shape: BoxShape.circle,
-                                            boxShadow: [
-                                              BoxShadow(
-                                                color: Colors.black.withOpacity(0.3),
-                                                blurRadius: 6,
-                                                offset: const Offset(0, 3),
-                                              ),
-                                            ],
                                           ),
-                                          child: const Icon(Icons.delete,
-                                              color: Colors.white, size: 14),
-                                        ),
-                                      ),
-                                    )
-                                        : Tooltip(
-                                      message: "Chat với $creatorName",
-                                      child: GestureDetector(
-                                        onTap: () async {
-                                          String avatarUrl =
-                                              creatorAvatars[creatorId] ?? '';
-                                          if (avatarUrl.isEmpty) {
-                                            try {
-                                              final res = await http.get(Uri.parse(
-                                                  "${AppConfig.webDomain}/wp-json/profile/v1/user/$creatorId"));
-                                              if (res.statusCode == 200) {
-                                                final data = jsonDecode(res.body);
-                                                avatarUrl =
-                                                    data['avatar_url'] ?? '';
+                                        )
+                                            : Tooltip(
+                                          message: "Chat với $creatorName",
+                                          child: GestureDetector(
+                                            onTap: () async {
+                                              String avatarUrl =
+                                                  creatorAvatars[creatorId] ?? '';
+                                              if (avatarUrl.isEmpty) {
+                                                try {
+                                                  final res = await http.get(Uri.parse(
+                                                      "${AppConfig.webDomain}/wp-json/profile/v1/user/$creatorId"));
+                                                  if (res.statusCode == 200) {
+                                                    final data = jsonDecode(res.body);
+                                                    avatarUrl =
+                                                        data['avatar_url'] ?? '';
+                                                  }
+                                                } catch (e) {
+                                                  debugPrint("❌ Lỗi fetch avatar: $e");
+                                                }
                                               }
-                                            } catch (e) {
-                                              debugPrint("❌ Lỗi fetch avatar: $e");
-                                            }
-                                          }
-                                          _openChat(
-                                            creatorId,
-                                            creatorNames[creatorId] ?? 'Người dùng',
-                                            avatarUrl: avatarUrl,
-                                          );
-                                        },
-                                        child: Container(
-                                          width: 30,
-                                          height: 30,
-                                          decoration: BoxDecoration(
-                                            gradient: const LinearGradient(
-                                                colors: [Colors.orange, Colors.red]),
-                                            shape: BoxShape.circle,
-                                            boxShadow: [
-                                              BoxShadow(
-                                                color: Colors.orange.withOpacity(0.5),
-                                                blurRadius: 8,
-                                                offset: const Offset(0, 4),
+                                              _openChat(
+                                                creatorId,
+                                                creatorNames[creatorId] ?? 'Người dùng',
+                                                avatarUrl: avatarUrl,
+                                              );
+                                            },
+                                            child: Container(
+                                              width: 30,
+                                              height: 30,
+                                              decoration: BoxDecoration(
+                                                gradient: const LinearGradient(
+                                                    colors: [Colors.orange, Colors.red]),
+                                                shape: BoxShape.circle,
+                                                boxShadow: [
+                                                  BoxShadow(
+                                                    color: Colors.orange.withOpacity(0.5),
+                                                    blurRadius: 8,
+                                                    offset: const Offset(0, 4),
+                                                  ),
+                                                ],
                                               ),
-                                            ],
+                                              child: const Icon(Icons.chat_bubble,
+                                                  color: Colors.white, size: 12),
+                                            ),
                                           ),
-                                          child: const Icon(Icons.chat_bubble,
-                                              color: Colors.white, size: 12),
                                         ),
-                                      ),
+                                        const SizedBox(height: 8),
+                                        // 🔗 CHIA SẺ — dùng chung cho mọi kèo,
+                                        // không phân biệt host hay không.
+                                        Tooltip(
+                                          message: "Chia sẻ kèo này",
+                                          child: GestureDetector(
+                                            onTap: () => _shareKeo(product),
+                                            child: Container(
+                                              width: 30,
+                                              height: 30,
+                                              decoration: BoxDecoration(
+                                                gradient: const LinearGradient(
+                                                  colors: [
+                                                    Color(0xFF66BB6A),
+                                                    Color(0xFF2E7D32),
+                                                  ],
+                                                  begin: Alignment.topLeft,
+                                                  end: Alignment.bottomRight,
+                                                ),
+                                                shape: BoxShape.circle,
+                                                boxShadow: [
+                                                  BoxShadow(
+                                                    color: Colors.green.withOpacity(0.4),
+                                                    blurRadius: 6,
+                                                    offset: const Offset(0, 3),
+                                                  ),
+                                                ],
+                                              ),
+                                              child: const Icon(Icons.share,
+                                                  color: Colors.white, size: 13),
+                                            ),
+                                          ),
+                                        ),
+                                      ],
                                     ),
                                   ],
                                 ),
@@ -4287,6 +4493,12 @@ class HeroProductImage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // 🚀 Chỉ decode ảnh ở kích thước thực tế hiển thị (x devicePixelRatio),
+    // tránh decode/giữ trong RAM ảnh gốc full-size cho 1 thumbnail 80x80.
+    final dpr = MediaQuery.of(context).devicePixelRatio;
+    final int? cacheW = width != null ? (width! * dpr).round() : null;
+    final int? cacheH = height != null ? (height! * dpr).round() : null;
+
     return Hero(
       tag: tag,
       flightShuttleBuilder: (context, animation, direction, fromCtx, toCtx) {
@@ -4303,6 +4515,8 @@ class HeroProductImage extends StatelessWidget {
           width: width,
           height: height,
           fit: fit,
+          memCacheWidth: cacheW,
+          memCacheHeight: cacheH,
           errorWidget: (_, __, ___) => Container(
             width: width,
             height: height,

@@ -34,6 +34,13 @@ class NotificationStore {
     String? type,
     Map<String, dynamic>? data,
   }) {
+    // 🔥 Chặn tận gốc: không cho tạo notification nếu cả title lẫn body
+    // đều rỗng — dù caller nào gọi vào đây cũng không lọt được "thông
+    // báo rỗng" vào danh sách.
+    if (title.trim().isEmpty && body.trim().isEmpty) {
+      return;
+    }
+
     items.insert(
       0,
       AppNotification(

@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:phoenix_socket/phoenix_socket.dart';
 import '../config/app_config.dart';
+import 'location_permission_gate.dart';
 
 /// PresenceService: connect socket + track vị trí 1 LẦN DUY NHẤT cho toàn app.
 /// Gọi `PresenceService.instance.start(...)` ngay sau khi login thành công
@@ -52,6 +53,16 @@ class PresenceService {
       });
     }
 
+    // 🔧 Xin quyền qua cổng dùng chung (không tự bắn request riêng, tránh
+    // đè lên dialog mà ShopPage/page khác có thể đang xin cùng lúc lúc
+    // app vừa mở). openSettingsDirectly: false vì đây là tác vụ chạy
+    // ngầm — nếu chưa có quyền thì âm thầm bỏ qua, không làm phiền user.
+    final granted = await LocationPermissionGate.ensure(openSettingsDirectly: false);
+    if (!granted) {
+      debugPrint('⚠️ [PresenceService] Chưa có quyền vị trí, bỏ qua tracking vị trí (vẫn kết nối socket khi GPS bật lại).');
+      return;
+    }
+
     _posStream = Geolocator.getPositionStream(
       locationSettings: const LocationSettings(
         accuracy: LocationAccuracy.medium,
@@ -72,6 +83,11 @@ class PresenceService {
   Future<void> _connect() async {
     if (_channel != null) return; // đã kết nối rồi, không connect lại
     try {
+      // 🔧 Cũng đi qua cổng dùng chung thay vì gọi Geolocator trực tiếp —
+      // nếu chưa có quyền, chờ granted thay vì tự bắn request riêng.
+      final granted = await LocationPermissionGate.ensure(openSettingsDirectly: false);
+      if (!granted) return;
+
       final pos =
       await Geolocator.getCurrentPosition(desiredAccuracy: LocationAccuracy.high);
       _lastLat = pos.latitude;

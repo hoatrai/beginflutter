@@ -4,6 +4,7 @@ import 'package:intl/intl.dart';
 import 'package:http/http.dart' as http;
 import 'package:shimmer/shimmer.dart' as shimmer;
 import '../config/app_config.dart';
+import '../helpers/storage_helper.dart';
 
 
 
@@ -128,6 +129,16 @@ class _UserInfoPageState extends State<UserInfoPage> {
     final text = commentController.text.trim();
     if (text.isEmpty) return;
 
+    // 🚀 Bắt buộc chọn sao trước khi gửi — trước đây userRating mặc định
+    // 0.0, người dùng quên chạm sao vẫn lưu thành review 0 sao, kéo tụt
+    // trung bình của người được đánh giá một cách không cố ý.
+    if (userRating <= 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Vui lòng chọn số sao đánh giá trước khi gửi")),
+      );
+      return;
+    }
+
     setState(() => isSubmitting = true);
 
     final payload = {
@@ -141,10 +152,16 @@ class _UserInfoPageState extends State<UserInfoPage> {
 
     try {
       final url = Uri.parse('$baseUrl/comments/add');
+      // 🚀 Gửi kèm JWT để backend xác thực đúng người đang đăng nhập,
+      // thay vì chỉ tin user_id do client tự khai trong body.
+      final token = await StorageHelper.read("jwt_token") ?? "";
 
       final response = await http.post(
         url,
-        headers: {'Content-Type': 'application/json'},
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $token',
+        },
         body: json.encode(payload),
       );
 
@@ -297,7 +314,7 @@ class _UserInfoPageState extends State<UserInfoPage> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           mainAxisSize: MainAxisSize.min, // giảm chiếm không gian dọc
                           children: [
-                           /* Text(
+                            /* Text(
                               widget.username,
                               style: const TextStyle(
                                 fontSize: 28,

@@ -29,6 +29,12 @@ import 'pages/notification_store.dart';
 
 final ValueNotifier<int> unreadNotiVN = ValueNotifier<int>(0);
 
+// 🚀 Báo cho các trang giữ trong IndexedStack (ShopPage, MapPage...) biết
+// tab nào đang thực sự hiển thị, để chúng tạm dừng timer/animation chạy
+// nền (vd auto-scroll 60fps) khi người dùng đang ở tab khác — tránh tốn
+// CPU/pin vô ích vì IndexedStack giữ nguyên state của các tab ẩn.
+final ValueNotifier<int> activeTabIndexVN = ValueNotifier<int>(0);
+
 String? pendingKeoId;
 Map<String, dynamic>? _pendingGroupChatData; // lưu FCM group-chat khi app bị terminated
 Map<String, dynamic>? _pendingCallData; // lưu FCM call khi app bị terminated
@@ -406,8 +412,28 @@ Future<void> setupFirebaseMessaging() async {
       return;
     }
 
+    // 🔥 Chặn triệt để "thông báo rỗng": bất kỳ push nào KHÔNG có payload
+    // "notification" (data-only / silent push) đều không được tạo item
+    // trong NotificationStore, bất kể type là gì. Trước đây chỉ lọc theo
+    // whitelist cứng 2 type (video_call, call_cancel) — nếu sau này có
+    // thêm 1 loại push câm mới mà quên thêm vào whitelist, hoặc gặp race
+    // condition khiến type bị đọc sai, nó sẽ lọt qua và tạo ra 1 thông
+    // báo title="Thông báo" + body rỗng. Check thẳng vào sự tồn tại của
+    // `notification` payload thay vì đoán theo type là cách chặn đúng gốc.
+    if (message.notification == null) {
+      debugPrint('⚠️ Bỏ qua push data-only (không có notification payload): type=$type');
+      return;
+    }
+
     final title = message.notification?.title ?? "Thông báo";
     final body = message.notification?.body ?? "";
+
+    // 🔥 Phòng thêm trường hợp server gửi notification nhưng title/body
+    // rỗng (chuỗi rỗng "", không phải null) — vẫn không cho vào store.
+    if (title.trim().isEmpty && body.trim().isEmpty) {
+      debugPrint('⚠️ Bỏ qua push có title/body rỗng: type=$type');
+      return;
+    }
 
     NotificationStore.add(
       title: title,
@@ -693,6 +719,7 @@ class _MainPageState extends State<MainPage>
       _selectedIndex = index;
       _pageCache[index] ??= _pageFor(index);
     });
+    activeTabIndexVN.value = index; // 🚀 báo cho các tab biết ai đang active
   }
 
   Widget _navItem(IconData icon, String label, int index) {
