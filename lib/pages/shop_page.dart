@@ -68,6 +68,10 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
   String? activityType;
   int _emptyPageCount = 0;
   bool _locationRefreshed = false;
+  // 🆕 Retry / empty state
+  bool hasError = false;
+  // 🆕 Report/Block
+  Set<String> blockedUserIds = {};
   // Thêm vào đầu class cùng chỗ với các biến khác
   int elapsedMinutes = 0;
   String? selectedCategory; // null = tất cả
@@ -371,10 +375,11 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
   // 🔧 FIX 3: CHẠY SONG SONG CÁC TÁC VỤ ĐỘC LẬP THAY VÌ TUẦN TỰ
   // ============================================================
   Future<void> _initFlow() async {
-    // 1. Load userId + findingStatus song song, nhẹ
+    // 1. Load userId + findingStatus + blocked list song song, nhẹ
     await Future.wait([
       _loadMyUserId(),
       loadFindingStatus(),
+      fetchBlockedUsers(), // 🆕
     ]);
 
     // 2. Xin quyền vị trí ngầm (không chặn UI)
@@ -386,6 +391,29 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
     // 4. Các tác vụ phụ chạy sau khi UI đã hiện
     fetchChatCount();
     connectSocket();
+  }
+
+  // 🆕 Lấy danh sách user đã bị mình chặn, để lọc feed/nearby ở client
+  Future<void> fetchBlockedUsers() async {
+    try {
+      final token = await StorageHelper.read("jwt_token") ?? "";
+      final res = await http.get(
+        Uri.parse("${AppConfig.webDomain}/wp-json/nhau/v1/blocked-list"),
+        headers: {"Authorization": "Bearer $token"},
+      );
+      if (res.statusCode == 200) {
+        final data = jsonDecode(res.body);
+        if (data['success'] == true) {
+          final ids = List.from(data['data'] ?? [])
+              .map((e) => e.toString())
+              .toSet();
+          if (!mounted) return;
+          setState(() => blockedUserIds = ids);
+        }
+      }
+    } catch (e) {
+      debugPrint("❌ fetchBlockedUsers error: $e");
+    }
   }
 
   Future<void> _requestLocationOnFirstLoad() async {
@@ -749,56 +777,6 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
     });
   }
 
-  /*Future<bool> ensureLocationPermission(BuildContext context) async {
-
-    bool serviceEnabled =
-    await Geolocator.isLocationServiceEnabled();
-
-    if (!serviceEnabled) {
-
-      _showLocationDialog(
-        context,
-        "Vui lòng bật GPS để tìm kèo gần bạn.",
-      );
-
-      return false;
-    }
-
-    LocationPermission permission =
-    await Geolocator.checkPermission();
-
-    debugPrint("📍 Current permission: $permission");
-
-    if (permission == LocationPermission.denied) {
-
-      permission =
-      await Geolocator.requestPermission();
-
-      debugPrint("📍 Requested permission: $permission");
-
-      if (permission == LocationPermission.denied) {
-
-        debugPrint("❌ User denied location");
-
-        return false;
-      }
-    }
-
-    if (permission == LocationPermission.deniedForever) {
-
-      debugPrint("❌ deniedForever");
-
-      _showLocationDialog(
-        context,
-        "Bạn đã tắt quyền vị trí.\nVào Cài đặt để bật lại.",
-      );
-
-      return false;
-    }
-
-    return true;
-  }*/
-
   // 🔵 Dùng khi VÀO TRANG — im lặng, không mở Settings
   Future<bool> _checkLocationSilent() async {
     try {
@@ -1127,8 +1105,10 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
 
         if (data['success'] == true) {
 
-          final users =
-          List<Map<String, dynamic>>.from(data['data']);
+          // 🆕 lọc bỏ user đã bị mình chặn
+          final users = List<Map<String, dynamic>>.from(data['data'])
+              .where((u) => !blockedUserIds.contains(u['user_id'].toString()))
+              .toList();
 
           // 🆕 THÊM LOG
           debugPrint("🔍 district=$districtName activity=${activityType ?? ''}");
@@ -1352,6 +1332,9 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
 
         // Lấy creator
         final creatorId = productMap['meta']['creator_id']?.toString() ?? "0";
+        // 🆕 Bỏ qua nếu creator đã bị mình chặn
+        if (blockedUserIds.contains(creatorId)) return;
+
         if (!creatorNames.containsKey(creatorId)) {
           await fetchCreatorsBulk([creatorId]);
         }
@@ -1491,6 +1474,7 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
           loading = false;
           _loadingMore = false;
           hasMore = false;
+          hasError = true; // 🆕
         });
         return;
       }
@@ -1509,6 +1493,10 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
         // Lọc hết hạn
         final timeString = productMap['meta']['time']?.toString() ?? '';
         if (isExpiredInvite(timeString)) continue;
+
+        // 🆕 Bỏ qua kèo của người đã bị chặn
+        final creatorId = productMap['meta']['creator_id']?.toString() ?? "0";
+        if (blockedUserIds.contains(creatorId)) continue;
 
         // Lọc 50km + cache distance
         try {
@@ -1539,7 +1527,6 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
         }
 
         // Gom creator id
-        final creatorId = productMap['meta']['creator_id']?.toString() ?? "0";
         if (creatorId != "0") creatorIds.add(creatorId);
 
         // Dùng cache nếu có
@@ -1563,6 +1550,7 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
         loading = false;
         _loadingMore = false;
         hasMore = apiHasMore;
+        hasError = false; // 🆕 fetch thành công thì clear error
         if (apiHasMore) page++;
       });
 
@@ -1600,6 +1588,7 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
         loading = false;
         _loadingMore = false;
         hasMore = false;
+        hasError = true; // 🆕
       });
     }
   }
@@ -1765,6 +1754,14 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
                     name,
                     avatarUrl: avatarUrl,
                   );
+                },
+
+                onLongPress: () {
+                  // 🆕 nhấn giữ để báo cáo/chặn người tìm kèo
+                  final userId = int.tryParse((u['user_id'] ?? 0).toString()) ?? 0;
+                  final name = u['display_name']?.toString() ?? 'Người dùng';
+                  if (userId == 0 || userId == myUserId) return;
+                  _showReportBlockUserSheet(targetUserId: userId, targetUserName: name);
                 },
 
                 child: Container(
@@ -2048,6 +2045,349 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
     );
   }
 
+  // ============================================================
+  // 🆕 REPORT + BLOCK
+  // Gọi tới các endpoint /wp-json/nhau/v1/report, /block, /unblock
+  // (xem modules/report-block.php phía backend)
+  // ============================================================
+
+  Future<void> _reportContent({
+    required String targetType, // 'product' | 'user'
+    required int targetId,
+    required String reason,
+    String note = '',
+  }) async {
+    try {
+      final token = await StorageHelper.read("jwt_token") ?? "";
+      final res = await http.post(
+        Uri.parse("${AppConfig.webDomain}/wp-json/nhau/v1/report"),
+        headers: {
+          "Authorization": "Bearer $token",
+          "Content-Type": "application/json",
+        },
+        body: jsonEncode({
+          "target_type": targetType,
+          "target_id": targetId,
+          "reason": reason,
+          "note": note,
+        }),
+      );
+      final data = jsonDecode(res.body);
+      if (res.statusCode == 200 && data['success'] == true) {
+        _showSnackBar("✅ Đã gửi báo cáo, cảm ơn bạn");
+      } else {
+        _showSnackBar(data['message']?.toString() ?? "❌ Không thể gửi báo cáo");
+      }
+    } catch (e) {
+      debugPrint("❌ _reportContent error: $e");
+      _showSnackBar("❌ Lỗi khi gửi báo cáo");
+    }
+  }
+
+  Future<void> _blockUser(int blockedId) async {
+    try {
+      final token = await StorageHelper.read("jwt_token") ?? "";
+      final res = await http.post(
+        Uri.parse("${AppConfig.webDomain}/wp-json/nhau/v1/block"),
+        headers: {
+          "Authorization": "Bearer $token",
+          "Content-Type": "application/json",
+        },
+        body: jsonEncode({"blocked_id": blockedId}),
+      );
+      final data = jsonDecode(res.body);
+      if (res.statusCode == 200 && data['success'] == true) {
+        final idStr = blockedId.toString();
+        if (!mounted) return;
+        setState(() {
+          blockedUserIds.add(idStr);
+          products.removeWhere(
+                (p) => (p['meta']['creator_id']?.toString() ?? '') == idStr,
+          );
+          findingUsers = findingUsers
+              ?.where((u) => u['user_id'].toString() != idStr)
+              .toList();
+        });
+        _showSnackBar("🚫 Đã chặn người dùng này");
+      } else {
+        _showSnackBar(data['message']?.toString() ?? "❌ Không thể chặn");
+      }
+    } catch (e) {
+      debugPrint("❌ _blockUser error: $e");
+      _showSnackBar("❌ Lỗi khi chặn người dùng");
+    }
+  }
+
+  void _showReportReasonSheet({
+    required String targetType,
+    required int targetId,
+  }) {
+    final reasons = [
+      {"label": "🚫 Nội dung không phù hợp", "value": "inappropriate"},
+      {"label": "🎭 Lừa đảo / giả mạo", "value": "scam"},
+      {"label": "🔞 Nội dung nhạy cảm", "value": "sensitive"},
+      {"label": "😡 Quấy rối / xúc phạm", "value": "harassment"},
+      {"label": "📛 Spam", "value": "spam"},
+      {"label": "❓ Khác", "value": "other"},
+    ];
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (_) {
+        return Container(
+          padding: EdgeInsets.fromLTRB(
+            16, 16, 16, 16 + MediaQuery.of(context).padding.bottom,
+          ),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: [primaryBlue.withOpacity(0.95), accentOrange.withOpacity(0.9)],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 40, height: 4,
+                margin: const EdgeInsets.only(bottom: 12),
+                decoration: BoxDecoration(
+                  color: Colors.white24,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              const Text(
+                "Vì sao bạn báo cáo?",
+                style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 12),
+              ...reasons.map((r) => GestureDetector(
+                onTap: () {
+                  Navigator.pop(context);
+                  _reportContent(
+                    targetType: targetType,
+                    targetId: targetId,
+                    reason: r['value']!,
+                  );
+                },
+                child: Container(
+                  width: double.infinity,
+                  margin: const EdgeInsets.symmetric(vertical: 4),
+                  padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 14),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.15),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: Colors.white24),
+                  ),
+                  child: Text(r['label']!, style: const TextStyle(color: Colors.white)),
+                ),
+              )),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _confirmBlock(int blockedId, String name) async {
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (_) => Dialog(
+        backgroundColor: Colors.transparent,
+        child: Container(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: [primaryBlue.withOpacity(0.9), accentOrange.withOpacity(0.8)],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+            borderRadius: BorderRadius.circular(16),
+          ),
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(
+                children: [
+                  const Icon(Icons.block, color: Colors.redAccent),
+                  const SizedBox(width: 8),
+                  const Text("Xác nhận chặn",
+                      style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Text(
+                "Bạn sẽ không thấy kèo hoặc tin nhắn từ $name nữa. Tiếp tục?",
+                style: const TextStyle(color: Colors.white70, fontSize: 14),
+              ),
+              const SizedBox(height: 20),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  Expanded(
+                    child: TextButton(
+                      onPressed: () => Navigator.pop(context, false),
+                      style: TextButton.styleFrom(
+                        backgroundColor: Colors.grey,
+                        foregroundColor: Colors.white,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                      ),
+                      child: const Text("Hủy"),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: TextButton(
+                      onPressed: () => Navigator.pop(context, true),
+                      style: TextButton.styleFrom(
+                        backgroundColor: Colors.redAccent,
+                        foregroundColor: Colors.white,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                      ),
+                      child: const Text("Chặn"),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    if (result == true) await _blockUser(blockedId);
+  }
+
+  // 🆕 Bottom sheet report/block khi bấm vào 1 sản phẩm/kèo cụ thể
+  void _showReportBlockSheet({
+    required int productId,
+    required int creatorId,
+    required String creatorName,
+  }) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (_) {
+        return Container(
+          padding: EdgeInsets.fromLTRB(
+            16, 16, 16, 16 + MediaQuery.of(context).padding.bottom,
+          ),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: [primaryBlue.withOpacity(0.95), accentOrange.withOpacity(0.9)],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 40, height: 4,
+                margin: const EdgeInsets.only(bottom: 12),
+                decoration: BoxDecoration(
+                  color: Colors.white24,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              ListTile(
+                leading: const Icon(Icons.flag, color: Colors.orangeAccent),
+                title: const Text("Báo cáo kèo này",
+                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                onTap: () {
+                  Navigator.pop(context);
+                  _showReportReasonSheet(targetType: "product", targetId: productId);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.block, color: Colors.redAccent),
+                title: Text("Chặn $creatorName",
+                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                onTap: () {
+                  Navigator.pop(context);
+                  _confirmBlock(creatorId, creatorName);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.close, color: Colors.white70),
+                title: const Text("Hủy", style: TextStyle(color: Colors.white70)),
+                onTap: () => Navigator.pop(context),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  // 🆕 Bottom sheet report/block khi nhấn giữ 1 user trong danh sách "đang tìm kèo"
+  void _showReportBlockUserSheet({
+    required int targetUserId,
+    required String targetUserName,
+  }) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (_) {
+        return Container(
+          padding: EdgeInsets.fromLTRB(
+            16, 16, 16, 16 + MediaQuery.of(context).padding.bottom,
+          ),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: [primaryBlue.withOpacity(0.95), accentOrange.withOpacity(0.9)],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 40, height: 4,
+                margin: const EdgeInsets.only(bottom: 12),
+                decoration: BoxDecoration(
+                  color: Colors.white24,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              ListTile(
+                leading: const Icon(Icons.flag, color: Colors.orangeAccent),
+                title: Text("Báo cáo $targetUserName",
+                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                onTap: () {
+                  Navigator.pop(context);
+                  _showReportReasonSheet(targetType: "user", targetId: targetUserId);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.block, color: Colors.redAccent),
+                title: Text("Chặn $targetUserName",
+                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                onTap: () {
+                  Navigator.pop(context);
+                  _confirmBlock(targetUserId, targetUserName);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.close, color: Colors.white70),
+                title: const Text("Hủy", style: TextStyle(color: Colors.white70)),
+                onTap: () => Navigator.pop(context),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
 
 
 
@@ -2190,6 +2530,88 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
     );
   }
 
+  // 🆕 Trạng thái lỗi mạng — có nút "Thử lại"
+  Widget _buildErrorState() {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.wifi_off, color: Colors.white70, size: 48),
+            const SizedBox(height: 12),
+            const Text(
+              "Không tải được danh sách kèo",
+              style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
+            ),
+            const SizedBox(height: 6),
+            const Text(
+              "Kiểm tra kết nối mạng và thử lại nhé",
+              style: TextStyle(color: Colors.white70, fontSize: 13),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 16),
+            ElevatedButton.icon(
+              onPressed: () {
+                setState(() {
+                  hasError = false;
+                  page = 1;
+                  hasMore = true;
+                });
+                fetchProducts();
+              },
+              icon: const Icon(Icons.refresh),
+              label: const Text("Thử lại"),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.orange,
+                foregroundColor: Colors.white,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // 🆕 Trạng thái rỗng — không có kèo nào phù hợp
+  Widget _buildEmptyState() {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: const [
+            Text("🍻", style: TextStyle(fontSize: 48)),
+            SizedBox(height: 12),
+            Text(
+              "Chưa có kèo nào gần bạn",
+              style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
+            ),
+            SizedBox(height: 6),
+            Text(
+              "Thử đổi bộ lọc hoặc kéo xuống để làm mới",
+              style: TextStyle(color: Colors.white70, fontSize: 13),
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // 🆕 Pull-to-refresh: reset trang + fetch lại từ đầu + đồng bộ blocked-list
+  Future<void> _handleRefresh() async {
+    setState(() {
+      page = 1;
+      hasMore = true;
+      hasError = false;
+      _emptyPageCount = 0;
+      products.clear();
+    });
+    await fetchProducts();
+    await fetchBlockedUsers();
+  }
+
 
   Map<String, dynamic> parseProduct(dynamic p) {
     final Map<String, dynamic> productMap = Map<String, dynamic>.from(p);
@@ -2305,8 +2727,9 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
           final payload = decoded['payload'];
           final String incomingUserId = payload['user_id'].toString();
 
-          // Bỏ qua nếu là chính mình
+          // Bỏ qua nếu là chính mình hoặc đã bị chặn
           if (incomingUserId == myUserId.toString()) return;
+          if (blockedUserIds.contains(incomingUserId)) return; // 🆕
 
           final newUser = {
             'user_id':        incomingUserId,
@@ -3333,625 +3756,675 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
                   itemCount: 5,
                   itemBuilder: (context, index) => buildInitialLoadingItem(),
                 )
-                    : NotificationListener<ScrollNotification>(
-                  onNotification: (scrollInfo) {
-                    if (scrollInfo is ScrollEndNotification) { // ✅ chỉ trigger khi dừng scroll
-                      final metrics = scrollInfo.metrics;
+                    : (!loading && products.isEmpty)
+                    ? RefreshIndicator(
+                  onRefresh: _handleRefresh,
+                  color: Colors.orange,
+                  backgroundColor: primaryBlue,
+                  child: ListView(
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    children: [
+                      const SizedBox(height: 80),
+                      hasError ? _buildErrorState() : _buildEmptyState(),
+                    ],
+                  ),
+                )
+                    : RefreshIndicator(
+                  onRefresh: _handleRefresh,
+                  color: Colors.orange,
+                  backgroundColor: primaryBlue,
+                  child: NotificationListener<ScrollNotification>(
+                    onNotification: (scrollInfo) {
+                      if (scrollInfo is ScrollEndNotification) { // ✅ chỉ trigger khi dừng scroll
+                        final metrics = scrollInfo.metrics;
 
-                      if (!_loadingMore &&
-                          !loading &&
-                          hasMore &&
-                          metrics.pixels >= metrics.maxScrollExtent - 300) { // 🆕 tăng threshold
+                        if (!_loadingMore &&
+                            !loading &&
+                            hasMore &&
+                            metrics.pixels >= metrics.maxScrollExtent - 300) { // 🆕 tăng threshold
 
-                        fetchProducts(); // ← fetchProducts tự handle loading state bên trong
+                          fetchProducts(); // ← fetchProducts tự handle loading state bên trong
+                        }
                       }
-                    }
-                    return false;
-                  },
-                  child: Builder(
-                    builder: (context) {
-                      final filtered = selectedCategory == null
-                          ? products
-                          : products.where((p) {
-                        final cats = p['category_names']?.toString().toLowerCase() ?? '';
-                        return cats.contains(selectedCategory!.toLowerCase());
-                      }).toList();
+                      return false;
+                    },
+                    child: Builder(
+                      builder: (context) {
+                        final filtered = selectedCategory == null
+                            ? products
+                            : products.where((p) {
+                          final cats = p['category_names']?.toString().toLowerCase() ?? '';
+                          return cats.contains(selectedCategory!.toLowerCase());
+                        }).toList();
 
-                      return ListView.builder(
-                        itemCount: filtered.length + (hasMore ? 1 : 0),
-                        itemBuilder: (context, index) {
-                          if (index == filtered.length) {
-                            if (!hasMore) return const SizedBox.shrink();
-                            return Column(
-                              children: List.generate(3, (_) => buildLoadMoreShimmerItem()),
-                            );
-                          }
-
-                          final product = filtered[index];
-
-                          final participants = product['participants'] ?? [];
-
-                          final missingIds = participants
-                              .where((p) => (p['avatar_url'] ?? '').toString().isEmpty)
-                              .map((p) => p['user_id']?.toString())
-                              .whereType<String>()
-                              .toSet()
-                              .toList();
-
-                          final int productId = int.tryParse(product['id'].toString()) ?? 0;
-
-                          final meta = product['meta'] ?? {};
-                          final slots = meta['slots']?.toString() ?? '';
-                          final time = meta['time']?.toString() ?? '';
-
-                          final int maxPeople = int.tryParse(slots) ?? 0;
-
-                          final int joinedCount =
-                              int.tryParse(product['joined_count']?.toString() ?? '0') ?? 0;
-
-                          final bool isHot =
-                              maxPeople > 0 && joinedCount >= (maxPeople * 0.6);
-
-                          bool isSoon = false;
-                          try {
-                            final eventTime = DateFormat("dd/MM/yyyy HH:mm").parse(time);
-                            final diff = eventTime.difference(DateTime.now());
-                            isSoon = diff.inHours <= 24 && diff.inSeconds > 0;
-                          } catch (_) {}
-
-                          bool isNew = false;
-                          try {
-                            final created = DateTime.parse(product['date_created']);
-                            isNew = DateTime.now().difference(created).inHours <= 6;
-                          } catch (_) {}
-
-                          final String creatorId = meta['creator_id']?.toString() ?? "0";
-
-                          if (!hostStatsMap.containsKey(creatorId) &&
-                              !_fetchingHostStats.contains(creatorId)) {
-                            _fetchingHostStats.add(creatorId);
-                            WidgetsBinding.instance.addPostFrameCallback((_) {
-                              fetchHostStats(creatorId).then((_) {
-                                _fetchingHostStats.remove(creatorId);
-                              });
-                            });
-                          }
-
-                          final userStats = hostStatsMap[creatorId];
-                          final String creatorName = product['creatorName'] ?? '...';
-                          final String pubName = meta['pub_name']?.toString() ?? "Ẩn danh";
-                          final address = meta['address']?.toString() ?? '';
-                          final categories = (product['category_names'] ?? '').toString();
-
-                          final metaData = product['meta_data'] as List? ?? [];
-
-                          final priceRange = metaData.firstWhere(
-                                (e) => e['key'] == 'price_range',
-                            orElse: () => null,
-                          )?['value'];
-
-                          String priceText;
-                          switch (priceRange) {
-                            case null:
-                            case '0':
-                              priceText = "Miễn phí";
-                              break;
-                            case '50-100':
-                              priceText = "50k - 100k";
-                              break;
-                            case '100-200':
-                              priceText = "100k - 200k/Người";
-                              break;
-                            case '200-500':
-                              priceText = "200k - 500k/Người";
-                              break;
-                            case '500+':
-                              priceText = "500k+/Người";
-                              break;
-                            default:
-                              priceText = "$priceRange";
-                          }
-
-                          final distance = product['distanceText'] ?? "";
-
-                          return GestureDetector(
-                            onTap: () async {
-                              final userId = await StorageHelper.read("user_id") ?? "0";
-
-                              bool hasJoined = false;
-                              if (product['participants'] != null &&
-                                  product['participants'] is List) {
-                                hasJoined = product['participants']
-                                    .any((p) => p['user_id'].toString() == userId);
-                              }
-
-                              Navigator.push(
-                                context,
-                                MaterialPageRoute(
-                                  builder: (context) => ProductDetailPage(
-                                    product: product,
-                                    onJoin: (updatedProduct) {
-                                      setState(() {
-                                        product['joined_count'] = updatedProduct['joined_count'];
-                                        product['participants'] = updatedProduct['participants'];
-
-                                        final invite = inviteStatusMap[productId];
-                                        if (invite != null) {
-                                          inviteStatusMap[productId] = InviteStatus(
-                                            isJoined: true,
-                                            isFull: invite.isFull,
-                                            status: invite.status,
-                                            joinedCount: updatedProduct['joined_count'] ?? 0,
-                                            maxPeople: invite.maxPeople,
-                                          );
-                                        }
-                                      });
-                                    },
-                                  ),
-                                ),
+                        return ListView.builder(
+                          physics: const AlwaysScrollableScrollPhysics(),
+                          itemCount: filtered.length + (hasMore ? 1 : 0),
+                          itemBuilder: (context, index) {
+                            if (index == filtered.length) {
+                              if (!hasMore) return const SizedBox.shrink();
+                              return Column(
+                                children: List.generate(3, (_) => buildLoadMoreShimmerItem()),
                               );
-                            },
-                            child: Card(
-                              margin: const EdgeInsets.all(8),
-                              elevation: 4,
-                              shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(16)),
-                              color: Colors.white.withOpacity(0.15),
-                              child: Padding(
-                                padding: const EdgeInsets.all(12.0),
-                                child: Row(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Column(
-                                      children: [
-                                        product["images"] != null &&
-                                            product["images"] is List &&
-                                            product["images"].isNotEmpty &&
-                                            (product["images"][0]["src"] ?? '').isNotEmpty
-                                            ? HeroProductImage(
-                                          tag: 'product-image-${product["id"]}',
-                                          imageUrl: product["images"][0]["src"],
-                                          width: 80,
-                                          height: 80,
-                                          borderRadius: BorderRadius.circular(12),
-                                        )
-                                            : Container(
-                                          width: 80,
-                                          height: 80,
-                                          decoration: BoxDecoration(
-                                            color: Colors.grey[300]?.withOpacity(0.3),
-                                            borderRadius: BorderRadius.circular(12),
-                                          ),
-                                          child: const Icon(Icons.image, size: 40),
-                                        ),
-                                        const SizedBox(height: 6),
-                                        Builder(
-                                          builder: (context) {
-                                            final InviteStatus? invite =
-                                            inviteStatusMap[productId];
+                            }
 
-                                            final int maxPeople = int.tryParse(
-                                                product['meta']['slots']?.toString() ??
-                                                    '0') ??
-                                                0;
+                            final product = filtered[index];
 
-                                            final int joinedCount =
-                                                inviteStatusMap[productId]?.joinedCount ??
-                                                    int.tryParse(
-                                                        product['joined_count']
-                                                            ?.toString() ??
-                                                            '0') ??
-                                                    0;
+                            final participants = product['participants'] ?? [];
 
-                                            if (maxPeople <= 0) return const SizedBox.shrink();
+                            final missingIds = participants
+                                .where((p) => (p['avatar_url'] ?? '').toString().isEmpty)
+                                .map((p) => p['user_id']?.toString())
+                                .whereType<String>()
+                                .toSet()
+                                .toList();
 
-                                            return Padding(
-                                              padding: const EdgeInsets.only(top: 6),
-                                              child: Text(
-                                                "🔥 Còn ${maxPeople - joinedCount} slots",
-                                                style: const TextStyle(
-                                                  fontSize: 12,
-                                                  fontWeight: FontWeight.bold,
-                                                  color: Colors.white70,
-                                                ),
-                                              ),
+                            final int productId = int.tryParse(product['id'].toString()) ?? 0;
+
+                            final meta = product['meta'] ?? {};
+                            final slots = meta['slots']?.toString() ?? '';
+                            final time = meta['time']?.toString() ?? '';
+
+                            final int maxPeople = int.tryParse(slots) ?? 0;
+
+                            final int joinedCount =
+                                int.tryParse(product['joined_count']?.toString() ?? '0') ?? 0;
+
+                            final bool isHot =
+                                maxPeople > 0 && joinedCount >= (maxPeople * 0.6);
+
+                            bool isSoon = false;
+                            try {
+                              final eventTime = DateFormat("dd/MM/yyyy HH:mm").parse(time);
+                              final diff = eventTime.difference(DateTime.now());
+                              isSoon = diff.inHours <= 24 && diff.inSeconds > 0;
+                            } catch (_) {}
+
+                            bool isNew = false;
+                            try {
+                              final created = DateTime.parse(product['date_created']);
+                              isNew = DateTime.now().difference(created).inHours <= 6;
+                            } catch (_) {}
+
+                            final String creatorId = meta['creator_id']?.toString() ?? "0";
+
+                            if (!hostStatsMap.containsKey(creatorId) &&
+                                !_fetchingHostStats.contains(creatorId)) {
+                              _fetchingHostStats.add(creatorId);
+                              WidgetsBinding.instance.addPostFrameCallback((_) {
+                                fetchHostStats(creatorId).then((_) {
+                                  _fetchingHostStats.remove(creatorId);
+                                });
+                              });
+                            }
+
+                            final userStats = hostStatsMap[creatorId];
+                            final String creatorName = product['creatorName'] ?? '...';
+                            final String pubName = meta['pub_name']?.toString() ?? "Ẩn danh";
+                            final address = meta['address']?.toString() ?? '';
+                            final categories = (product['category_names'] ?? '').toString();
+
+                            final metaData = product['meta_data'] as List? ?? [];
+
+                            final priceRange = metaData.firstWhere(
+                                  (e) => e['key'] == 'price_range',
+                              orElse: () => null,
+                            )?['value'];
+
+                            String priceText;
+                            switch (priceRange) {
+                              case null:
+                              case '0':
+                                priceText = "Miễn phí";
+                                break;
+                              case '50-100':
+                                priceText = "50k - 100k";
+                                break;
+                              case '100-200':
+                                priceText = "100k - 200k/Người";
+                                break;
+                              case '200-500':
+                                priceText = "200k - 500k/Người";
+                                break;
+                              case '500+':
+                                priceText = "500k+/Người";
+                                break;
+                              default:
+                                priceText = "$priceRange";
+                            }
+
+                            final distance = product['distanceText'] ?? "";
+
+                            return GestureDetector(
+                              onTap: () async {
+                                final userId = await StorageHelper.read("user_id") ?? "0";
+
+                                bool hasJoined = false;
+                                if (product['participants'] != null &&
+                                    product['participants'] is List) {
+                                  hasJoined = product['participants']
+                                      .any((p) => p['user_id'].toString() == userId);
+                                }
+
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (context) => ProductDetailPage(
+                                      product: product,
+                                      onJoin: (updatedProduct) {
+                                        setState(() {
+                                          product['joined_count'] = updatedProduct['joined_count'];
+                                          product['participants'] = updatedProduct['participants'];
+
+                                          final invite = inviteStatusMap[productId];
+                                          if (invite != null) {
+                                            inviteStatusMap[productId] = InviteStatus(
+                                              isJoined: true,
+                                              isFull: invite.isFull,
+                                              status: invite.status,
+                                              joinedCount: updatedProduct['joined_count'] ?? 0,
+                                              maxPeople: invite.maxPeople,
                                             );
-                                          },
-                                        ),
-                                        const SizedBox(height: 6),
-                                        SizedBox(
-                                          width: 90,
-                                          height: 32,
-                                          child: ElevatedButton(
-                                            style: ElevatedButton.styleFrom(
-                                              backgroundColor: _getCategoryColor(categories),
-                                              shape: RoundedRectangleBorder(
-                                                borderRadius: BorderRadius.circular(6),
-                                              ),
-                                              padding: EdgeInsets.zero,
+                                          }
+                                        });
+                                      },
+                                    ),
+                                  ),
+                                );
+                              },
+                              child: Card(
+                                margin: const EdgeInsets.all(8),
+                                elevation: 4,
+                                shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(16)),
+                                color: Colors.white.withOpacity(0.15),
+                                child: Padding(
+                                  padding: const EdgeInsets.all(12.0),
+                                  child: Row(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Column(
+                                        children: [
+                                          product["images"] != null &&
+                                              product["images"] is List &&
+                                              product["images"].isNotEmpty &&
+                                              (product["images"][0]["src"] ?? '').isNotEmpty
+                                              ? HeroProductImage(
+                                            tag: 'product-image-${product["id"]}',
+                                            imageUrl: product["images"][0]["src"],
+                                            width: 80,
+                                            height: 80,
+                                            borderRadius: BorderRadius.circular(12),
+                                          )
+                                              : Container(
+                                            width: 80,
+                                            height: 80,
+                                            decoration: BoxDecoration(
+                                              color: Colors.grey[300]?.withOpacity(0.3),
+                                              borderRadius: BorderRadius.circular(12),
                                             ),
-                                            onPressed: () {
-                                              Navigator.push(
-                                                context,
-                                                MaterialPageRoute(
-                                                  builder: (_) =>
-                                                      ProductDetailPage(product: product),
+                                            child: const Icon(Icons.image, size: 40),
+                                          ),
+                                          const SizedBox(height: 6),
+                                          Builder(
+                                            builder: (context) {
+                                              final InviteStatus? invite =
+                                              inviteStatusMap[productId];
+
+                                              final int maxPeople = int.tryParse(
+                                                  product['meta']['slots']?.toString() ??
+                                                      '0') ??
+                                                  0;
+
+                                              final int joinedCount =
+                                                  inviteStatusMap[productId]?.joinedCount ??
+                                                      int.tryParse(
+                                                          product['joined_count']
+                                                              ?.toString() ??
+                                                              '0') ??
+                                                      0;
+
+                                              if (maxPeople <= 0) return const SizedBox.shrink();
+
+                                              return Padding(
+                                                padding: const EdgeInsets.only(top: 6),
+                                                child: Text(
+                                                  "🔥 Còn ${maxPeople - joinedCount} slots",
+                                                  style: const TextStyle(
+                                                    fontSize: 12,
+                                                    fontWeight: FontWeight.bold,
+                                                    color: Colors.white70,
+                                                  ),
                                                 ),
                                               );
                                             },
-                                            child: const Text(
-                                              "Vào phòng",
-                                              style: TextStyle(
-                                                fontSize: 12,
-                                                color: Colors.white,
-                                                fontWeight: FontWeight.bold,
+                                          ),
+                                          const SizedBox(height: 6),
+                                          SizedBox(
+                                            width: 90,
+                                            height: 32,
+                                            child: ElevatedButton(
+                                              style: ElevatedButton.styleFrom(
+                                                backgroundColor: _getCategoryColor(categories),
+                                                shape: RoundedRectangleBorder(
+                                                  borderRadius: BorderRadius.circular(6),
+                                                ),
+                                                padding: EdgeInsets.zero,
+                                              ),
+                                              onPressed: () {
+                                                Navigator.push(
+                                                  context,
+                                                  MaterialPageRoute(
+                                                    builder: (_) =>
+                                                        ProductDetailPage(product: product),
+                                                  ),
+                                                );
+                                              },
+                                              child: const Text(
+                                                "Vào phòng",
+                                                style: TextStyle(
+                                                  fontSize: 12,
+                                                  color: Colors.white,
+                                                  fontWeight: FontWeight.bold,
+                                                ),
                                               ),
                                             ),
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                    const SizedBox(width: 12),
-                                    Expanded(
-                                      child: Column(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
-                                        children: [
-                                          Text(product["name"].toString(),
-                                              style: const TextStyle(
-                                                  fontSize: 18,
-                                                  fontWeight: FontWeight.bold,
-                                                  color: Colors.white)),
-                                          const SizedBox(height: 4),
-                                          Wrap(
-                                            spacing: 6,
-                                            runSpacing: 4,
-                                            children: [
-                                              if (isNew)
-                                                Container(
-                                                  padding: const EdgeInsets.symmetric(
-                                                      horizontal: 8, vertical: 3),
-                                                  decoration: BoxDecoration(
-                                                    color: Colors.green.withOpacity(0.25),
-                                                    borderRadius: BorderRadius.circular(10),
-                                                  ),
-                                                  child: const Text(
-                                                    "🆕 Mới tạo",
-                                                    style: TextStyle(
-                                                      fontSize: 8,
-                                                      color: Colors.white,
-                                                      fontWeight: FontWeight.bold,
-                                                    ),
-                                                  ),
-                                                ),
-                                              if (isHot)
-                                                Container(
-                                                  padding: const EdgeInsets.symmetric(
-                                                      horizontal: 8, vertical: 3),
-                                                  decoration: BoxDecoration(
-                                                    color: Colors.red.withOpacity(1),
-                                                    borderRadius: BorderRadius.circular(10),
-                                                  ),
-                                                  child: const Text(
-                                                    "🔥 Hot",
-                                                    style: TextStyle(
-                                                      fontSize: 6,
-                                                      color: Colors.white,
-                                                      fontWeight: FontWeight.bold,
-                                                    ),
-                                                  ),
-                                                ),
-                                            ],
-                                          ),
-                                          const SizedBox(height: 8),
-                                          Wrap(
-                                            spacing: 6,
-                                            runSpacing: 6,
-                                            children: (categories.split(',')
-                                                .map((e) => e.trim())
-                                                .where((e) => e.isNotEmpty)
-                                                .toList()
-                                              ..sort((a, b) {
-                                                final pa = _categoryTagPriority(a);
-                                                final pb = _categoryTagPriority(b);
-                                                if (pa != pb) return pa.compareTo(pb);
-                                                return a.toLowerCase().compareTo(b.toLowerCase());
-                                              }))
-                                                .map<Widget>((item) {
-                                              final color = _getCategoryColor(item);
-                                              return Container(
-                                                padding: const EdgeInsets.symmetric(
-                                                    horizontal: 8, vertical: 4),
-                                                decoration: BoxDecoration(
-                                                  color: color.withOpacity(0.15),
-                                                  borderRadius: BorderRadius.circular(20),
-                                                  border: Border.all(
-                                                      color: color.withOpacity(0.4)),
-                                                ),
-                                                child: Text(
-                                                  item.trim(),
-                                                  style: TextStyle(
-                                                    fontSize: 11,
-                                                    color: color,
-                                                    fontWeight: FontWeight.w600,
-                                                  ),
-                                                ),
-                                              );
-                                            }).toList(),
-                                          ),
-                                          const SizedBox(height: 8),
-                                          Row(
-                                            children: [
-                                              const Icon(Icons.location_on,
-                                                  size: 14, color: Colors.orange),
-                                              const SizedBox(width: 4),
-                                              Container(
-                                                padding: const EdgeInsets.symmetric(
-                                                    horizontal: 8, vertical: 3),
-                                                decoration: BoxDecoration(
-                                                  color: Colors.blue.withOpacity(0.2),
-                                                  borderRadius: BorderRadius.circular(10),
-                                                  border: Border.all(
-                                                      color:
-                                                      Colors.blueAccent.withOpacity(0.5)),
-                                                ),
-                                                child: Text(
-                                                  distance,
-                                                  style: const TextStyle(
-                                                    fontSize: 12,
-                                                    color: Colors.white,
-                                                    fontWeight: FontWeight.bold,
-                                                  ),
-                                                ),
-                                              ),
-                                              const SizedBox(width: 6),
-                                              Expanded(
-                                                child: Text(
-                                                  pubName,
-                                                  maxLines: 1,
-                                                  overflow: TextOverflow.ellipsis,
-                                                  style: const TextStyle(
-                                                      fontSize: 12, color: Colors.white70),
-                                                ),
-                                              ),
-                                            ],
-                                          ),
-                                          const SizedBox(height: 4),
-                                          Text("Thời gian: $time",
-                                              style: const TextStyle(
-                                                  fontSize: 12, color: Color(0xFF66BB6A))),
-                                          const SizedBox(height: 4),
-                                          Row(
-                                            mainAxisSize: MainAxisSize.min,
-                                            children: [
-                                              if (time.isNotEmpty)
-                                                CountdownTimerText(timeString: time),
-                                              if (time.isNotEmpty && isSoon)
-                                                const SizedBox(width: 6),
-                                              if (isSoon)
-                                                Container(
-                                                  padding: const EdgeInsets.symmetric(
-                                                      horizontal: 10, vertical: 4),
-                                                  decoration: BoxDecoration(
-                                                    gradient: const LinearGradient(
-                                                      colors: [
-                                                        Color(0xFFFFA726),
-                                                        Color(0xFFFF5722),
-                                                      ],
-                                                    ),
-                                                    borderRadius: BorderRadius.circular(12),
-                                                    boxShadow: [
-                                                      BoxShadow(
-                                                        color: Colors.orange.withOpacity(0.5),
-                                                        blurRadius: 3,
-                                                        spreadRadius: 1,
-                                                      ),
-                                                    ],
-                                                  ),
-                                                  child: const Text(
-                                                    "⚡ Sắp diễn ra",
-                                                    style: TextStyle(
-                                                      fontSize: 8,
-                                                      color: Colors.white,
-                                                      fontWeight: FontWeight.bold,
-                                                    ),
-                                                  ),
-                                                ),
-                                            ],
-                                          ),
-                                          const SizedBox(height: 4),
-                                          Text("$priceText • $slots slots",
-                                              style: const TextStyle(
-                                                  fontSize: 14,
-                                                  fontWeight: FontWeight.w500,
-                                                  color: Colors.white)),
-                                          const SizedBox(height: 4),
-                                          Row(
-                                            children: [
-                                              GestureDetector(
-                                                onTap: () {
-                                                  Navigator.push(
-                                                    context,
-                                                    MaterialPageRoute(
-                                                      builder: (_) => UserInfoPage(
-                                                        userId: myUserId,
-                                                        username: creatorName,
-                                                        targetUserId: int.parse(creatorId),
-                                                        avatarUrl: creatorAvatars[creatorId],
-                                                      ),
-                                                    ),
-                                                  );
-                                                },
-                                                child: buildParticipantStack(
-                                                  creatorId,
-                                                  product['participants'] ?? [],
-                                                ),
-                                              ),
-                                              const SizedBox(width: 4),
-                                              Expanded(
-                                                child: Wrap(
-                                                  spacing: 4,
-                                                  runSpacing: 2,
-                                                  crossAxisAlignment: WrapCrossAlignment.center,
-                                                  children: [
-                                                    Text(
-                                                      creatorName,
-                                                      style: const TextStyle(
-                                                        fontSize: 12,
-                                                        color: Colors.orangeAccent,
-                                                        fontWeight: FontWeight.bold,
-                                                      ),
-                                                    ),
-                                                    _statChip(
-                                                      "⭐ ${userStats?['attendance_percent'] ?? 0}%",
-                                                      const Color(0xFF66BB6A),
-                                                    ),
-                                                    _statChip(
-                                                      "🧾 ${userStats?['total_keo'] ?? 0}",
-                                                      const Color(0xFF66BB6A),
-                                                    ),
-                                                    _statChip(
-                                                      "🎯 ${userStats?['real_join_percent'] ?? 0}%",
-                                                      const Color(0xFF66BB6A),
-                                                    ),
-                                                  ],
-                                                ),
-                                              ),
-                                            ],
                                           ),
                                         ],
                                       ),
-                                    ),
-                                    // DELETE/CHAT + SHARE button
-                                    Column(
-                                      children: [
-                                        myUserId == int.tryParse(creatorId)
-                                            ? Tooltip(
-                                          message: "Xóa",
-                                          child: GestureDetector(
-                                            onTap: () {
-                                              final id = product["id"];
-                                              final int pid = id != null
-                                                  ? int.tryParse(id.toString()) ?? 0
-                                                  : 0;
-                                              if (pid == 0) return;
-                                              _confirmDelete(context, pid);
-                                            },
-                                            child: Container(
-                                              width: 30,
-                                              height: 30,
-                                              decoration: BoxDecoration(
-                                                gradient: const LinearGradient(
-                                                  colors: [
-                                                    Color(0xFFE57373),
-                                                    Color(0xFFEF5350)
-                                                  ],
-                                                  begin: Alignment.topLeft,
-                                                  end: Alignment.bottomRight,
-                                                ),
-                                                shape: BoxShape.circle,
-                                                boxShadow: [
-                                                  BoxShadow(
-                                                    color: Colors.black.withOpacity(0.3),
-                                                    blurRadius: 6,
-                                                    offset: const Offset(0, 3),
+                                      const SizedBox(width: 12),
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            Text(product["name"].toString(),
+                                                style: const TextStyle(
+                                                    fontSize: 18,
+                                                    fontWeight: FontWeight.bold,
+                                                    color: Colors.white)),
+                                            const SizedBox(height: 4),
+                                            Wrap(
+                                              spacing: 6,
+                                              runSpacing: 4,
+                                              children: [
+                                                if (isNew)
+                                                  Container(
+                                                    padding: const EdgeInsets.symmetric(
+                                                        horizontal: 8, vertical: 3),
+                                                    decoration: BoxDecoration(
+                                                      color: Colors.green.withOpacity(0.25),
+                                                      borderRadius: BorderRadius.circular(10),
+                                                    ),
+                                                    child: const Text(
+                                                      "🆕 Mới tạo",
+                                                      style: TextStyle(
+                                                        fontSize: 8,
+                                                        color: Colors.white,
+                                                        fontWeight: FontWeight.bold,
+                                                      ),
+                                                    ),
                                                   ),
-                                                ],
-                                              ),
-                                              child: const Icon(Icons.delete,
-                                                  color: Colors.white, size: 14),
+                                                if (isHot)
+                                                  Container(
+                                                    padding: const EdgeInsets.symmetric(
+                                                        horizontal: 8, vertical: 3),
+                                                    decoration: BoxDecoration(
+                                                      color: Colors.red.withOpacity(1),
+                                                      borderRadius: BorderRadius.circular(10),
+                                                    ),
+                                                    child: const Text(
+                                                      "🔥 Hot",
+                                                      style: TextStyle(
+                                                        fontSize: 6,
+                                                        color: Colors.white,
+                                                        fontWeight: FontWeight.bold,
+                                                      ),
+                                                    ),
+                                                  ),
+                                              ],
                                             ),
-                                          ),
-                                        )
-                                            : Tooltip(
-                                          message: "Chat với $creatorName",
-                                          child: GestureDetector(
-                                            onTap: () async {
-                                              String avatarUrl =
-                                                  creatorAvatars[creatorId] ?? '';
-                                              if (avatarUrl.isEmpty) {
-                                                try {
-                                                  final res = await http.get(Uri.parse(
-                                                      "${AppConfig.webDomain}/wp-json/profile/v1/user/$creatorId"));
-                                                  if (res.statusCode == 200) {
-                                                    final data = jsonDecode(res.body);
-                                                    avatarUrl =
-                                                        data['avatar_url'] ?? '';
+                                            const SizedBox(height: 8),
+                                            Wrap(
+                                              spacing: 6,
+                                              runSpacing: 6,
+                                              children: (categories.split(',')
+                                                  .map((e) => e.trim())
+                                                  .where((e) => e.isNotEmpty)
+                                                  .toList()
+                                                ..sort((a, b) {
+                                                  final pa = _categoryTagPriority(a);
+                                                  final pb = _categoryTagPriority(b);
+                                                  if (pa != pb) return pa.compareTo(pb);
+                                                  return a.toLowerCase().compareTo(b.toLowerCase());
+                                                }))
+                                                  .map<Widget>((item) {
+                                                final color = _getCategoryColor(item);
+                                                return Container(
+                                                  padding: const EdgeInsets.symmetric(
+                                                      horizontal: 8, vertical: 4),
+                                                  decoration: BoxDecoration(
+                                                    color: color.withOpacity(0.15),
+                                                    borderRadius: BorderRadius.circular(20),
+                                                    border: Border.all(
+                                                        color: color.withOpacity(0.4)),
+                                                  ),
+                                                  child: Text(
+                                                    item.trim(),
+                                                    style: TextStyle(
+                                                      fontSize: 11,
+                                                      color: color,
+                                                      fontWeight: FontWeight.w600,
+                                                    ),
+                                                  ),
+                                                );
+                                              }).toList(),
+                                            ),
+                                            const SizedBox(height: 8),
+                                            Row(
+                                              children: [
+                                                const Icon(Icons.location_on,
+                                                    size: 14, color: Colors.orange),
+                                                const SizedBox(width: 4),
+                                                Container(
+                                                  padding: const EdgeInsets.symmetric(
+                                                      horizontal: 8, vertical: 3),
+                                                  decoration: BoxDecoration(
+                                                    color: Colors.blue.withOpacity(0.2),
+                                                    borderRadius: BorderRadius.circular(10),
+                                                    border: Border.all(
+                                                        color:
+                                                        Colors.blueAccent.withOpacity(0.5)),
+                                                  ),
+                                                  child: Text(
+                                                    distance,
+                                                    style: const TextStyle(
+                                                      fontSize: 12,
+                                                      color: Colors.white,
+                                                      fontWeight: FontWeight.bold,
+                                                    ),
+                                                  ),
+                                                ),
+                                                const SizedBox(width: 6),
+                                                Expanded(
+                                                  child: Text(
+                                                    pubName,
+                                                    maxLines: 1,
+                                                    overflow: TextOverflow.ellipsis,
+                                                    style: const TextStyle(
+                                                        fontSize: 12, color: Colors.white70),
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                            const SizedBox(height: 4),
+                                            Text("Thời gian: $time",
+                                                style: const TextStyle(
+                                                    fontSize: 12, color: Color(0xFF66BB6A))),
+                                            const SizedBox(height: 4),
+                                            Row(
+                                              mainAxisSize: MainAxisSize.min,
+                                              children: [
+                                                if (time.isNotEmpty)
+                                                  CountdownTimerText(timeString: time),
+                                                if (time.isNotEmpty && isSoon)
+                                                  const SizedBox(width: 6),
+                                                if (isSoon)
+                                                  Container(
+                                                    padding: const EdgeInsets.symmetric(
+                                                        horizontal: 10, vertical: 4),
+                                                    decoration: BoxDecoration(
+                                                      gradient: const LinearGradient(
+                                                        colors: [
+                                                          Color(0xFFFFA726),
+                                                          Color(0xFFFF5722),
+                                                        ],
+                                                      ),
+                                                      borderRadius: BorderRadius.circular(12),
+                                                      boxShadow: [
+                                                        BoxShadow(
+                                                          color: Colors.orange.withOpacity(0.5),
+                                                          blurRadius: 3,
+                                                          spreadRadius: 1,
+                                                        ),
+                                                      ],
+                                                    ),
+                                                    child: const Text(
+                                                      "⚡ Sắp diễn ra",
+                                                      style: TextStyle(
+                                                        fontSize: 8,
+                                                        color: Colors.white,
+                                                        fontWeight: FontWeight.bold,
+                                                      ),
+                                                    ),
+                                                  ),
+                                              ],
+                                            ),
+                                            const SizedBox(height: 4),
+                                            Text("$priceText • $slots slots",
+                                                style: const TextStyle(
+                                                    fontSize: 14,
+                                                    fontWeight: FontWeight.w500,
+                                                    color: Colors.white)),
+                                            const SizedBox(height: 4),
+                                            Row(
+                                              children: [
+                                                GestureDetector(
+                                                  onTap: () {
+                                                    Navigator.push(
+                                                      context,
+                                                      MaterialPageRoute(
+                                                        builder: (_) => UserInfoPage(
+                                                          userId: myUserId,
+                                                          username: creatorName,
+                                                          targetUserId: int.parse(creatorId),
+                                                          avatarUrl: creatorAvatars[creatorId],
+                                                        ),
+                                                      ),
+                                                    );
+                                                  },
+                                                  child: buildParticipantStack(
+                                                    creatorId,
+                                                    product['participants'] ?? [],
+                                                  ),
+                                                ),
+                                                const SizedBox(width: 4),
+                                                Expanded(
+                                                  child: Wrap(
+                                                    spacing: 4,
+                                                    runSpacing: 2,
+                                                    crossAxisAlignment: WrapCrossAlignment.center,
+                                                    children: [
+                                                      Text(
+                                                        creatorName,
+                                                        style: const TextStyle(
+                                                          fontSize: 12,
+                                                          color: Colors.orangeAccent,
+                                                          fontWeight: FontWeight.bold,
+                                                        ),
+                                                      ),
+                                                      _statChip(
+                                                        "⭐ ${userStats?['attendance_percent'] ?? 0}%",
+                                                        const Color(0xFF66BB6A),
+                                                      ),
+                                                      _statChip(
+                                                        "🧾 ${userStats?['total_keo'] ?? 0}",
+                                                        const Color(0xFF66BB6A),
+                                                      ),
+                                                      _statChip(
+                                                        "🎯 ${userStats?['real_join_percent'] ?? 0}%",
+                                                        const Color(0xFF66BB6A),
+                                                      ),
+                                                    ],
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                      // DELETE/CHAT + SHARE button
+                                      Column(
+                                        children: [
+                                          myUserId == int.tryParse(creatorId)
+                                              ? Tooltip(
+                                            message: "Xóa",
+                                            child: GestureDetector(
+                                              onTap: () {
+                                                final id = product["id"];
+                                                final int pid = id != null
+                                                    ? int.tryParse(id.toString()) ?? 0
+                                                    : 0;
+                                                if (pid == 0) return;
+                                                _confirmDelete(context, pid);
+                                              },
+                                              child: Container(
+                                                width: 30,
+                                                height: 30,
+                                                decoration: BoxDecoration(
+                                                  gradient: const LinearGradient(
+                                                    colors: [
+                                                      Color(0xFFE57373),
+                                                      Color(0xFFEF5350)
+                                                    ],
+                                                    begin: Alignment.topLeft,
+                                                    end: Alignment.bottomRight,
+                                                  ),
+                                                  shape: BoxShape.circle,
+                                                  boxShadow: [
+                                                    BoxShadow(
+                                                      color: Colors.black.withOpacity(0.3),
+                                                      blurRadius: 6,
+                                                      offset: const Offset(0, 3),
+                                                    ),
+                                                  ],
+                                                ),
+                                                child: const Icon(Icons.delete,
+                                                    color: Colors.white, size: 14),
+                                              ),
+                                            ),
+                                          )
+                                              : Tooltip(
+                                            message: "Chat với $creatorName",
+                                            child: GestureDetector(
+                                              onTap: () async {
+                                                String avatarUrl =
+                                                    creatorAvatars[creatorId] ?? '';
+                                                if (avatarUrl.isEmpty) {
+                                                  try {
+                                                    final res = await http.get(Uri.parse(
+                                                        "${AppConfig.webDomain}/wp-json/profile/v1/user/$creatorId"));
+                                                    if (res.statusCode == 200) {
+                                                      final data = jsonDecode(res.body);
+                                                      avatarUrl =
+                                                          data['avatar_url'] ?? '';
+                                                    }
+                                                  } catch (e) {
+                                                    debugPrint("❌ Lỗi fetch avatar: $e");
                                                   }
-                                                } catch (e) {
-                                                  debugPrint("❌ Lỗi fetch avatar: $e");
                                                 }
-                                              }
-                                              _openChat(
-                                                creatorId,
-                                                creatorNames[creatorId] ?? 'Người dùng',
-                                                avatarUrl: avatarUrl,
-                                              );
-                                            },
-                                            child: Container(
-                                              width: 30,
-                                              height: 30,
-                                              decoration: BoxDecoration(
-                                                gradient: const LinearGradient(
-                                                    colors: [Colors.orange, Colors.red]),
-                                                shape: BoxShape.circle,
-                                                boxShadow: [
-                                                  BoxShadow(
-                                                    color: Colors.orange.withOpacity(0.5),
-                                                    blurRadius: 8,
-                                                    offset: const Offset(0, 4),
-                                                  ),
-                                                ],
-                                              ),
-                                              child: const Icon(Icons.chat_bubble,
-                                                  color: Colors.white, size: 12),
-                                            ),
-                                          ),
-                                        ),
-                                        const SizedBox(height: 8),
-                                        // 🔗 CHIA SẺ — dùng chung cho mọi kèo,
-                                        // không phân biệt host hay không.
-                                        Tooltip(
-                                          message: "Chia sẻ kèo này",
-                                          child: GestureDetector(
-                                            onTap: () => _shareKeo(product),
-                                            child: Container(
-                                              width: 30,
-                                              height: 30,
-                                              decoration: BoxDecoration(
-                                                gradient: const LinearGradient(
-                                                  colors: [
-                                                    Color(0xFF66BB6A),
-                                                    Color(0xFF2E7D32),
+                                                _openChat(
+                                                  creatorId,
+                                                  creatorNames[creatorId] ?? 'Người dùng',
+                                                  avatarUrl: avatarUrl,
+                                                );
+                                              },
+                                              child: Container(
+                                                width: 30,
+                                                height: 30,
+                                                decoration: BoxDecoration(
+                                                  gradient: const LinearGradient(
+                                                      colors: [Colors.orange, Colors.red]),
+                                                  shape: BoxShape.circle,
+                                                  boxShadow: [
+                                                    BoxShadow(
+                                                      color: Colors.orange.withOpacity(0.5),
+                                                      blurRadius: 8,
+                                                      offset: const Offset(0, 4),
+                                                    ),
                                                   ],
-                                                  begin: Alignment.topLeft,
-                                                  end: Alignment.bottomRight,
                                                 ),
-                                                shape: BoxShape.circle,
-                                                boxShadow: [
-                                                  BoxShadow(
-                                                    color: Colors.green.withOpacity(0.4),
-                                                    blurRadius: 6,
-                                                    offset: const Offset(0, 3),
-                                                  ),
-                                                ],
+                                                child: const Icon(Icons.chat_bubble,
+                                                    color: Colors.white, size: 12),
                                               ),
-                                              child: const Icon(Icons.share,
-                                                  color: Colors.white, size: 13),
                                             ),
                                           ),
-                                        ),
-                                      ],
-                                    ),
-                                  ],
+                                          const SizedBox(height: 8),
+                                          // 🆕 REPORT/BLOCK — chỉ hiện khi không phải kèo của mình
+                                          if (myUserId != int.tryParse(creatorId))
+                                            Tooltip(
+                                              message: "Báo cáo / Chặn",
+                                              child: GestureDetector(
+                                                onTap: () {
+                                                  final id = product["id"];
+                                                  final int pid = id != null
+                                                      ? int.tryParse(id.toString()) ?? 0
+                                                      : 0;
+                                                  if (pid == 0) return;
+                                                  _showReportBlockSheet(
+                                                    productId: pid,
+                                                    creatorId: int.tryParse(creatorId) ?? 0,
+                                                    creatorName: creatorName,
+                                                  );
+                                                },
+                                                child: Container(
+                                                  width: 30,
+                                                  height: 30,
+                                                  decoration: BoxDecoration(
+                                                    color: Colors.black26,
+                                                    shape: BoxShape.circle,
+                                                    border: Border.all(color: Colors.white24),
+                                                  ),
+                                                  child: const Icon(Icons.more_horiz,
+                                                      color: Colors.white70, size: 16),
+                                                ),
+                                              ),
+                                            ),
+                                          const SizedBox(height: 8),
+                                          // 🔗 CHIA SẺ — dùng chung cho mọi kèo,
+                                          // không phân biệt host hay không.
+                                          Tooltip(
+                                            message: "Chia sẻ kèo này",
+                                            child: GestureDetector(
+                                              onTap: () => _shareKeo(product),
+                                              child: Container(
+                                                width: 30,
+                                                height: 30,
+                                                decoration: BoxDecoration(
+                                                  gradient: const LinearGradient(
+                                                    colors: [
+                                                      Color(0xFF66BB6A),
+                                                      Color(0xFF2E7D32),
+                                                    ],
+                                                    begin: Alignment.topLeft,
+                                                    end: Alignment.bottomRight,
+                                                  ),
+                                                  shape: BoxShape.circle,
+                                                  boxShadow: [
+                                                    BoxShadow(
+                                                      color: Colors.green.withOpacity(0.4),
+                                                      blurRadius: 6,
+                                                      offset: const Offset(0, 3),
+                                                    ),
+                                                  ],
+                                                ),
+                                                child: const Icon(Icons.share,
+                                                    color: Colors.white, size: 13),
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ],
+                                  ),
                                 ),
                               ),
-                            ),
-                          );
-                        },
-                      ); // đóng ListView.builder
-                    }, // đóng Builder builder
-                  ), // đóng Builder
-                ),
+                            );
+                          },
+                        ); // đóng ListView.builder
+                      }, // đóng Builder builder
+                    ), // đóng Builder
+                  ), // đóng NotificationListener
+                ), // đóng RefreshIndicator
               ),
             ],
           ),
