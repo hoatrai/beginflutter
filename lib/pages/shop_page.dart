@@ -3,6 +3,8 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'dart:async';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:video_player/video_player.dart';
+import 'package:visibility_detector/visibility_detector.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:web_socket_channel/status.dart' as status;
@@ -3361,6 +3363,98 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
   //  - 2 ảnh  -> chia đôi ngang nhau
   //  - >=3 ảnh -> 1 ảnh lớn bên trái + 2 ảnh nhỏ xếp chồng bên phải,
   //               ảnh nhỏ cuối cùng có badge "+N" nếu còn dư ảnh chưa hiện.
+  // 🎥🖼️ Giong _buildImageCollage nhung uu tien video lam o lon (neu co),
+  // anh van hien xen ke o cac o con ben canh - khong an mat anh khi co video.
+  Widget _buildMediaCollage(Map<String, dynamic> product, String? videoUrl) {
+    const double gap = 3.0;
+
+    if (videoUrl == null) {
+      return _buildImageCollage(product);
+    }
+
+    final rawImages = product["images"];
+    final List imagesList = rawImages is List ? rawImages : [];
+    final List<String> urls = imagesList
+        .map((e) => (e is Map ? e["src"] : null)?.toString() ?? '')
+        .where((s) => s.isNotEmpty)
+        .toList();
+
+    Widget videoMainCell() => _CardVideoPreview(url: videoUrl);
+
+    Widget subCell(String url, {String? badge}) {
+      return Stack(
+        fit: StackFit.expand,
+        children: [
+          CachedNetworkImage(
+            imageUrl: url,
+            fit: BoxFit.cover,
+            errorWidget: (_, __, ___) => Container(
+              color: Colors.black26,
+              child: const Icon(Icons.broken_image, color: Colors.white38),
+            ),
+          ),
+          if (badge != null)
+            Container(
+              color: Colors.black.withOpacity(0.55),
+              alignment: Alignment.center,
+              child: Text(
+                badge,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 19,
+                ),
+              ),
+            ),
+        ],
+      );
+    }
+
+    // Video nhung khong co anh nao -> video full-bleed
+    if (urls.isEmpty) {
+      return videoMainCell();
+    }
+
+    // Video + 1 anh -> chia doi ngang nhau
+    if (urls.length == 1) {
+      return Row(
+        children: [
+          Expanded(child: videoMainCell()),
+          const SizedBox(width: gap),
+          Expanded(child: subCell(urls[0])),
+        ],
+      );
+    }
+
+    // Video + >=2 anh -> video lon ben trai, 2 anh nho xep chong ben phai
+    // (anh thu 2 co badge "+N" neu con du anh chua hien)
+    final int extra = urls.length - 2;
+    return Row(
+      children: [
+        Expanded(
+          flex: 3,
+          child: videoMainCell(),
+        ),
+        const SizedBox(width: gap),
+        Expanded(
+          flex: 2,
+          child: Column(
+            children: [
+              Expanded(child: subCell(urls[0])),
+              const SizedBox(height: gap),
+              Expanded(
+                child: subCell(
+                  urls[1],
+                  badge: extra > 0 ? "+$extra" : null,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
   Widget _buildImageCollage(Map<String, dynamic> product) {
     const double gap = 3.0;
 
@@ -4000,6 +4094,27 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
 
                             final metaData = product['meta_data'] as List? ?? [];
 
+                            // Lay video dau tien (neu co) tu meta_data, giong
+                            // cach parse ben product_detail_page.dart.
+                            String? cardVideoUrl;
+                            for (final item in metaData) {
+                              if (item is Map && item['key'] == 'videos') {
+                                final raw = item['value'];
+                                if (raw != null && raw.toString().isNotEmpty) {
+                                  try {
+                                    final decoded = jsonDecode(raw.toString());
+                                    final List list = decoded is String
+                                        ? (jsonDecode(decoded) as List)
+                                        : (decoded as List);
+                                    if (list.isNotEmpty) {
+                                      cardVideoUrl = list.first.toString();
+                                    }
+                                  } catch (_) {}
+                                }
+                                break;
+                              }
+                            }
+
                             final priceRange = metaData.firstWhere(
                                   (e) => e['key'] == 'price_range',
                               orElse: () => null,
@@ -4119,7 +4234,7 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
                                             borderRadius: BorderRadius.circular(19),
                                             child: _BreathingScale(
                                               active: isLive,
-                                              child: _buildImageCollage(product),
+                                              child: _buildMediaCollage(product, cardVideoUrl),
                                             ),
                                           ),
                                         ),
@@ -5138,6 +5253,188 @@ Widget _buildSkeletonItem() {
 // 1.0 -> 1.045) khi keo dang "Dang dien ra". Dat BEN TRONG ClipRRect cua
 // card nen phan tran ra ngoai bi cat gon, khong lam doi kich thuoc card
 // va khong dam sang card ben canh trong ListView.
+// 🎥 Preview video tu phat (mute + loop) ngay trong card danh sach, thay
+// cho anh tinh khi keo co video. Khong dung Hero (khac co che voi anh)
+// de tranh xung dot animation khi chuyen sang trang chi tiet.
+// 🛡️ FIX CRASH: giới hạn số video được phép init/play CÙNG LÚC trong toàn
+// app. Nguyên nhân crash gốc: ListView.builder build sẵn vài card phía
+// trước/sau viewport (cache extent) → nếu nhiều card có video đứng gần
+// nhau, tất cả tự autoplay cùng lúc trong initState() → vượt quá số lượng
+// decoder phần cứng (MediaCodec) máy hỗ trợ đồng thời → crash NATIVE mà
+// try/catch phía Dart không bắt được. Giải pháp: chỉ init/play khi card
+// THẬT SỰ hiện rõ trên màn hình (VisibilityDetector), và cap số video
+// đang chạy đồng thời qua toàn app.
+class _VideoPlaybackLimiter {
+  static const int maxConcurrent = 2;
+  static final List<_CardVideoPreviewState> _active = [];
+
+  static bool requestSlot(_CardVideoPreviewState s) {
+    if (_active.contains(s)) return true;
+    if (_active.length >= maxConcurrent) return false;
+    _active.add(s);
+    return true;
+  }
+
+  static void release(_CardVideoPreviewState s) {
+    _active.remove(s);
+  }
+}
+
+class _CardVideoPreview extends StatefulWidget {
+  final String url;
+  const _CardVideoPreview({required this.url});
+
+  @override
+  State<_CardVideoPreview> createState() => _CardVideoPreviewState();
+}
+
+class _CardVideoPreviewState extends State<_CardVideoPreview> {
+  VideoPlayerController? _controller;
+  bool _ready = false;
+  bool _error = false;
+  bool _initializing = false;
+  bool _visible = false;
+  // key riêng cho mỗi State (không đổi theo url) để VisibilityDetector
+  // không bị nhầm lẫn khi Flutter reuse widget trong ListView.
+  final Key _visibilityKey = UniqueKey();
+
+  void _onVisibilityChanged(VisibilityInfo info) {
+    final isVisible = info.visibleFraction > 0.55;
+    if (isVisible == _visible) return;
+    _visible = isVisible;
+
+    if (_visible) {
+      _tryInit();
+    } else {
+      _teardown();
+    }
+  }
+
+  Future<void> _tryInit() async {
+    if (_initializing || _controller != null) return;
+    if (!_VideoPlaybackLimiter.requestSlot(this)) {
+      // Hết chỗ (đã có đủ video khác đang play) → giữ placeholder,
+      // KHÔNG init để tránh vượt giới hạn decoder.
+      return;
+    }
+    _initializing = true;
+    try {
+      final ctrl = VideoPlayerController.networkUrl(Uri.parse(widget.url));
+      await ctrl.initialize();
+      await ctrl.setLooping(true);
+      await ctrl.setVolume(0);
+
+      // Có thể widget đã bị cuộn ra ngoài / dispose trong lúc đang chờ
+      // initialize (network chậm) → phải dọn ngay, không được play.
+      if (!mounted || !_visible) {
+        ctrl.dispose();
+        _VideoPlaybackLimiter.release(this);
+        _initializing = false;
+        return;
+      }
+
+      await ctrl.play();
+      if (!mounted || !_visible) {
+        ctrl.dispose();
+        _VideoPlaybackLimiter.release(this);
+        _initializing = false;
+        return;
+      }
+
+      setState(() {
+        _controller = ctrl;
+        _ready = true;
+      });
+    } catch (e) {
+      _VideoPlaybackLimiter.release(this);
+      if (mounted) setState(() => _error = true);
+    } finally {
+      _initializing = false;
+    }
+  }
+
+  // Dispose hẳn controller khi card cuộn ra khỏi màn hình (không chỉ
+  // pause) để trả decoder về cho các video khác — đây là phần quan
+  // trọng nhất giúp không bao giờ vượt quá _VideoPlaybackLimiter.maxConcurrent.
+  void _teardown() {
+    _VideoPlaybackLimiter.release(this);
+    final ctrl = _controller;
+    _controller = null;
+    if (ctrl != null) {
+      ctrl.pause();
+      ctrl.dispose();
+    }
+    if (mounted && _ready) {
+      setState(() => _ready = false);
+    } else {
+      _ready = false;
+    }
+  }
+
+  @override
+  void dispose() {
+    _VideoPlaybackLimiter.release(this);
+    _controller?.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return VisibilityDetector(
+      key: _visibilityKey,
+      onVisibilityChanged: _onVisibilityChanged,
+      child: _buildContent(),
+    );
+  }
+
+  Widget _buildContent() {
+    if (_error) {
+      return Container(
+        color: const Color(0xFF2A2340),
+        child: const Icon(Icons.videocam_off, size: 40, color: Colors.white38),
+      );
+    }
+    if (!_ready || _controller == null) {
+      return Container(
+        color: const Color(0xFF2A2340),
+        child: const Center(
+          child: SizedBox(
+            width: 22,
+            height: 22,
+            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white54),
+          ),
+        ),
+      );
+    }
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        FittedBox(
+          fit: BoxFit.cover,
+          child: SizedBox(
+            width: _controller!.value.size.width,
+            height: _controller!.value.size.height,
+            child: VideoPlayer(_controller!),
+          ),
+        ),
+        // Icon nho bao "video dang mute", tranh gay khong hieu tai sao im lang.
+        Positioned(
+          right: 8,
+          top: 8,
+          child: Container(
+            padding: const EdgeInsets.all(5),
+            decoration: BoxDecoration(
+              color: Colors.black.withOpacity(0.5),
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(Icons.volume_off, size: 12, color: Colors.white),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 class _BreathingScale extends StatefulWidget {
   final bool active;
   final Widget child;
