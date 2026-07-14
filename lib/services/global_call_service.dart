@@ -10,6 +10,7 @@ import '../app_globals.dart'; // navigatorKey, isChatPageOpen, currentChatTarget
 import '../config/app_config.dart';
 import '../pages/video_call_page.dart';
 import '../pages/webrtc_signal_bus.dart';
+import 'callkit_service.dart';
 
 /// GlobalCallService — singleton sống suốt vòng đời app.
 ///
@@ -111,8 +112,24 @@ class GlobalCallService {
   }
 
   void cancelPendingCall(String? topic) {
-    if (topic != null && topic == _activeTopic) {
-      _dismissOverlay?.call(); // tự stop chuông + đóng banner + đóng channel
+    if (topic == null) return;
+
+    // ⚠️ FIX: trước đây chỉ dismiss banner khi topic khớp _activeTopic,
+    // bỏ sót trường hợp cuộc gọi đến lúc app đang nền/bị kill (hiện qua
+    // CallkitService.showIncomingCall native, KHÔNG đi qua handleFcmCall
+    // nên _activeTopic vẫn null), rồi app được mở lên foreground trong
+    // lúc đang đổ chuông — FCM "call_cancel" lúc đó bị FOREGROUND listener
+    // bắt (không phải background handler), gọi thẳng vào đây, nhưng vì
+    // topic != _activeTopic nên không làm gì cả → màn hình CallKit native
+    // tiếp tục đổ chuông tới hết 30s dù người gọi đã cúp máy từ lâu.
+    //
+    // Luôn gọi endCall(topic) trước — no-op an toàn nếu không có cuộc gọi
+    // native nào khớp id này — để dẹp CallKit native trong MỌI trường hợp,
+    // không chỉ trường hợp có banner trong-app đang hiện.
+    CallkitService.instance.endCall(topic);
+
+    if (topic == _activeTopic) {
+      _dismissOverlay?.call(); // tự stop chuông banner + đóng channel
     }
   }
 
@@ -204,6 +221,13 @@ class GlobalCallService {
       final msg = jsonDecode(data as String);
       final event = msg['event'];
       if (event == 'call_end' || event == 'call_reject') {
+        // Dẹp cả banner trong-app lẫn màn hình CallKit native (nếu lỡ cả
+        // 2 đang hiện song song — hiếm nhưng có thể xảy ra khi app vừa
+        // chuyển từ nền sang foreground giữa lúc đang đổ chuông). endCall
+        // là no-op an toàn nếu không có cuộc gọi native nào khớp topic.
+        if (_activeTopic != null) {
+          CallkitService.instance.endCall(_activeTopic!);
+        }
         _dismissOverlay?.call();
       }
     } catch (_) {}
@@ -267,6 +291,9 @@ class GlobalCallService {
         onAccept: () async {
           accepted = true;
           _send("call_accept", {});
+          // Dẹp UI cuộc gọi native tương ứng (nếu đang hiện) — không hại
+          // gì nếu không có cuộc gọi nào khớp id này (no-op).
+          CallkitService.instance.endCall(topic);
 
           final activeChannel = _callChannel;
           final activeTopic = _activeTopic;
@@ -301,6 +328,7 @@ class GlobalCallService {
         onReject: () {
           dismiss();
           _send("call_reject", {});
+          CallkitService.instance.endCall(topic);
         },
       ),
     );
@@ -310,6 +338,129 @@ class GlobalCallService {
     _autoDismissTimer = Timer(const Duration(seconds: 30), () {
       _dismissOverlay?.call();
     });
+  }
+
+  // ---------------------------------------------------------------
+  // 🆕 GỌI TỪ CallkitService — khi người dùng bấm Nghe/Từ chối trên màn
+  // hình cuộc gọi đến NATIVE (Android full-screen Activity / iOS CallKit),
+  // thường xảy ra khi app đang nền hoặc bị kill hẳn lúc chuông reo, nên
+  // KHÔNG có channel/banner nào được dựng sẵn từ handleFcmCall() — phải tự
+  // kết nối lại từ đầu ở đây.
+  // ---------------------------------------------------------------
+
+  /// Người dùng bấm "Nghe" trên UI cuộc gọi đến native.
+  Future<void> acceptCallFromNative({
+    required String topic,
+    String? fromId,
+    required String fromName,
+    String? fromAvatar,
+    required String callType,
+  }) async {
+    // Nếu đúng lúc này banner trong-app cho CÙNG topic cũng đang hiện
+    // (hiếm, ví dụ app vừa chuyển sang foreground kịp lúc) -> dùng lại
+    // luôn kênh đã kết nối sẵn thay vì mở kênh mới, tránh 2 kết nối trùng.
+    if (_activeTopic == topic && _callChannel != null) {
+      _dismissOverlay?.call();
+    }
+
+    await _connectCallChannel(topic);
+    _send("call_accept", {});
+    CallkitService.instance.endCall(topic);
+
+    final activeChannel = _callChannel;
+    _callChannel = null;
+    _activeTopic = null;
+    if (activeChannel == null) return;
+
+    WebRTCSignalBus.instance.bindSocket(channel: activeChannel, topicName: topic);
+
+    // ⚠️ FIX race condition với SplashPage (xem giải thích đầy đủ ở
+    // `PendingNativeCall` trong services/app_globals.dart).
+    //
+    // Nếu navigator ĐÃ sẵn sàng (app đang chạy nền chứ không bị kill hẳn,
+    // MainPage/route hiện tại đã tồn tại từ trước) -> an toàn để push
+    // trực tiếp như cũ, không có Splash nào đang tranh route.
+    //
+    // Nếu navigator CHƯA sẵn sàng (app vừa được mở lại từ trạng thái bị
+    // kill -> đang chạy qua SplashPage) -> KHÔNG tự push nữa (dễ bị
+    // SplashPage.pushReplacement() xoá mất ngay sau đó). Thay vào đó lưu
+    // lại, để MainPage._openPendingNativeCall() tự mở sau khi Splash đã
+    // điều hướng xong.
+    final overlayReady = navigatorKey.currentState?.overlay != null;
+    if (overlayReady) {
+      _pushVideoCallPageWithRetry(
+        socket: activeChannel,
+        topic: topic,
+        callType: callType,
+        targetName: fromName,
+        targetAvatar: fromAvatar,
+      );
+    } else {
+      pendingNativeCall = PendingNativeCall(
+        socket: activeChannel,
+        topic: topic,
+        callType: callType,
+        targetName: fromName,
+        targetAvatar: fromAvatar,
+      );
+    }
+  }
+
+  /// Người dùng bấm "Từ chối" (hoặc để hết giờ) trên UI cuộc gọi đến native.
+  void rejectCallFromNative(String topic) async {
+    CallkitService.instance.endCall(topic);
+    if (_activeTopic == topic) {
+      // Có banner trong-app đang hiện song song cho topic này -> dùng
+      // đúng luồng dismiss cũ (đã tự gửi call_reject qua onReject).
+      _dismissOverlay?.call();
+      return;
+    }
+    // Không có channel nào đang mở sẵn -> kết nối tạm để báo cho người
+    // gọi biết mình đã từ chối, xong đóng lại ngay.
+    await _connectCallChannel(topic);
+    _send("call_reject", {});
+    closeActiveCallChannel();
+  }
+
+  void _pushVideoCallPageWithRetry({
+    required WebSocketChannel socket,
+    required String topic,
+    required String callType,
+    String? targetName,
+    String? targetAvatar,
+    int attempt = 0,
+  }) {
+    final nav = navigatorKey.currentState;
+    if (nav == null) {
+      if (attempt >= 15) {
+        debugPrint('GlobalCallService: navigator not ready after 15 attempts, bỏ qua điều hướng');
+        return;
+      }
+      Future.delayed(const Duration(milliseconds: 200), () {
+        _pushVideoCallPageWithRetry(
+          socket: socket,
+          topic: topic,
+          callType: callType,
+          targetName: targetName,
+          targetAvatar: targetAvatar,
+          attempt: attempt + 1,
+        );
+      });
+      return;
+    }
+
+    nav.push(
+      MaterialPageRoute(
+        builder: (_) => VideoCallPage(
+          socket: socket,
+          topic: topic,
+          isCaller: false,
+          callType: callType,
+          targetName: targetName,
+          targetAvatar: targetAvatar,
+        ),
+      ),
+    );
   }
 }
 

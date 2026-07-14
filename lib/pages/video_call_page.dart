@@ -4,6 +4,7 @@ import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../services/global_call_service.dart';
+import '../services/call_foreground_service.dart';
 import 'webrtc_signal_bus.dart';
 
 /// ⚠️ FIX QUAN TRỌNG (so với bản cũ):
@@ -76,6 +77,13 @@ class _VideoCallPageState extends State<VideoCallPage> {
   @override
   void initState() {
     super.initState();
+
+    // ✅ THÊM: bật foreground service NGAY khi vào màn hình gọi, lúc app
+    // còn chắc chắn đang ở foreground (bắt buộc với Android 14+, xem
+    // services/call_foreground_service.dart). Đây là phần giữ cuộc gọi
+    // không bị Android ngắt tín hiệu khi user đẩy app xuống nền giữa lúc
+    // đang gọi.
+    CallForegroundService.start(isVideo: _isVideoCall);
 
     // Gắn socket/topic vào bus để gửi offer/answer/ice qua đúng kênh.
     WebRTCSignalBus.instance.bindSocket(
@@ -205,6 +213,19 @@ class _VideoCallPageState extends State<VideoCallPage> {
       });
     };
 
+    // 🆕 FIX: xử lý ngay các tín hiệu webrtc_offer/answer/ice đã đến TRƯỚC
+    // khi pc kịp tạo xong (lúc còn đang xin quyền camera/mic ở trên) và bị
+    // bus xếp vào hàng đợi thay vì vứt bỏ. Đây là nguyên nhân của lỗi
+    // "thỉnh thoảng bắt máy xong không thấy hình" — không gọi dòng này thì
+    // hàng đợi vẫn nằm im, offer sớm coi như mất.
+    //
+    // ⚠️ PHẢI đặt SAU addTrack()/bindPeerConnectionTrackListener()/
+    // onIceCandidate ở trên — nếu flush sớm hơn, lỡ hàng đợi có sẵn 1
+    // webrtc_offer thì createAnswer() sẽ chạy TRƯỚC khi track của mình
+    // được add vào pc, khiến answer thiếu media line, bên gọi nhận hình/
+    // tiếng không đầy đủ dù handshake vẫn "thành công".
+    await WebRTCSignalBus.instance.flushPending();
+
     // 🎥 Local preview (chỉ video call mới có gì để hiện)
     if (_isVideoCall) {
       local.srcObject = localStream;
@@ -265,6 +286,10 @@ class _VideoCallPageState extends State<VideoCallPage> {
   // ---------------- CLEANUP ----------------
   @override
   void dispose() {
+    // ✅ THÊM: cuộc gọi đã kết thúc (tự cúp máy hoặc bị đối phương cúp) —
+    // tắt luôn foreground service, không cần giữ app sống nữa.
+    CallForegroundService.stop();
+
     _remoteStreamSub?.cancel();
     _callEndedSub?.cancel();
     _durationTimer?.cancel();

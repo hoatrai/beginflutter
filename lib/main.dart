@@ -6,11 +6,13 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 
 import 'helpers/lifecycle_tracker.dart';
 import 'helpers/user_helper.dart';
 import 'config/app_config.dart';
 import 'services/global_call_service.dart';
+import 'services/callkit_service.dart';
 import 'services/presence_service.dart';
 import 'app_globals.dart';
 import 'helpers/storage_helper.dart';
@@ -24,6 +26,7 @@ import 'pages/product_detail_page.dart';
 import 'pages/chat_page.dart';
 import 'pages/group_chat_page.dart';
 import 'pages/notification_store.dart';
+import 'pages/video_call_page.dart';
 
 // ---------------- GLOBAL STATE ----------------
 
@@ -49,14 +52,46 @@ class WooCommerceConfig {
 
 // ---------------- FIREBASE BACKGROUND HANDLER ----------------
 
-// Khi app bị tắt hoàn toàn, FCM notification field sẽ tự hiện notification
-// trên Android — không cần flutter_local_notifications.
-// Handler này chỉ cần init Firebase, không làm gì thêm.
+// 🆕 FIX (lỗi "chỉ hiện notification, không biết có ai gọi"): trước đây
+// handler này không làm gì ngoài init Firebase, nên khi app ở nền/bị kill,
+// cuộc gọi đến chỉ hiện được 1 dòng notification thụ động do OS tự vẽ từ
+// field "notification" trong payload FCM — không chuông, không rung, không
+// full-screen, rất dễ bị bỏ lỡ.
+//
+// Giờ khi nhận FCM type "video_call" ở đây, chủ động gọi
+// CallkitService.showIncomingCall() để hiện MÀN HÌNH CUỘC GỌI ĐẾN THẬT SỰ
+// của hệ điều hành (Android: full-screen Activity + chuông đổ + rung, kể cả
+// khi máy khoá; iOS: CallKit) — giống trải nghiệm cuộc gọi điện thoại thường
+// thay vì chỉ 1 thông báo im lìm.
+//
+// ⚠️ Cần thêm cấu hình native (AndroidManifest / Info.plist / pubspec) —
+// xem file docs/callkit_setup.md đi kèm để biết chính xác cần thêm gì.
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   await Firebase.initializeApp();
   debugPrint('Background message: ${message.messageId}');
-  // Android tự hiện notification nếu server gửi kèm "notification" field trong FCM payload
+
+  final data = message.data;
+  final type = data['type'];
+
+  if (type == 'video_call') {
+    await CallkitService.instance.showIncomingCall(data);
+    return;
+  }
+
+  if (type == 'call_cancel') {
+    // Người gọi đã huỷ trước khi bên nghe kịp bắt máy -> dẹp luôn màn hình
+    // cuộc gọi native đang đổ chuông (nếu không, nó sẽ tự treo tới hết
+    // `duration` 30s mới tự tắt, gây khó chịu / hiện nhầm "cuộc gọi nhỡ").
+    final topic = data['topic'] as String?;
+    if (topic != null) {
+      await CallkitService.instance.endCall(topic);
+    }
+    return;
+  }
+
+  // Các loại push khác: Android tự hiện notification nếu server gửi kèm
+  // "notification" field trong FCM payload, không cần xử lý gì thêm ở đây.
 }
 
 // ---------------- CALL PAYLOAD HANDLER ----------------
@@ -229,12 +264,33 @@ Future<bool> openGroupChatFromData(Map<String, dynamic> data) =>
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
+  // ✅ THÊM: bắt buộc gọi 1 lần trước runApp() để mở kênh giao tiếp giữa
+  // isolate chính và isolate của CallForegroundService (services/call_foreground_service.dart).
+  // Xem giải thích đầy đủ trong file đó — đây là phần còn thiếu khiến
+  // flutter_foreground_task có trong pubspec.yaml nhưng chưa từng chạy.
+  FlutterForegroundTask.initCommunicationPort();
+
+  // 🆕 Nối CallkitService (màn hình cuộc gọi đến NATIVE) với GlobalCallService
+  // (nơi thật sự xử lý accept/reject: kết nối lại channel, mở VideoCallPage).
+  // PHẢI gán callback TRƯỚC khi gọi CallkitService.instance.init(), vì
+  // init() có thể tự trigger accept ngay (trường hợp app mở lên từ việc
+  // bấm "Nghe" trên cuộc gọi native lúc app đang bị kill — xem
+  // checkPendingAcceptedCall() trong callkit_service.dart).
+  CallkitService.instance.onAccept = GlobalCallService.instance.acceptCallFromNative;
+  CallkitService.instance.onReject = GlobalCallService.instance.rejectCallFromNative;
+
   try {
     await Firebase.initializeApp();
     FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
     await setupFirebaseMessaging();
   } catch (e) {
     debugPrint('⚠️ Firebase init failed: $e');
+  }
+
+  try {
+    await CallkitService.instance.init();
+  } catch (e) {
+    debugPrint('⚠️ CallkitService init failed: $e');
   }
 
   runApp(const CryptoApp(initialPage: SplashPage()));
@@ -620,6 +676,7 @@ class _MainPageState extends State<MainPage>
       _openPendingInvite();
       _openPendingGroupChat();
       _openPendingCall();
+      _openPendingNativeCall();
     });
   }
 
@@ -712,6 +769,30 @@ class _MainPageState extends State<MainPage>
     _pendingCallData = null;
     await Future.delayed(const Duration(seconds: 1));
     GlobalCallService.instance.handleFcmCall(data);
+  }
+
+  /// 🆕 Xử lý cuộc gọi đã được NGHE ngay trên màn hình CallKit native lúc
+  /// app đang bị kill hẳn (xem `PendingNativeCall` trong
+  /// services/app_globals.dart để hiểu vì sao cần bước này thay vì
+  /// GlobalCallService tự push thẳng vào navigator).
+  Future<void> _openPendingNativeCall() async {
+    if (pendingNativeCall == null) return;
+    final call = pendingNativeCall!;
+    pendingNativeCall = null;
+    await Future.delayed(const Duration(milliseconds: 500));
+    if (!mounted) return;
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => VideoCallPage(
+          socket: call.socket,
+          topic: call.topic,
+          isCaller: false,
+          callType: call.callType,
+          targetName: call.targetName,
+          targetAvatar: call.targetAvatar,
+        ),
+      ),
+    );
   }
 
   void _onItemTapped(int index) {

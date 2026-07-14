@@ -62,6 +62,15 @@ dependencies:
   flutter_ringtone_player: ^4.0.0+4
   emoji_picker_flutter: ^2.0.0
 
+  # 🆕 Màn hình cuộc gọi đến NATIVE (full-screen + chuông đổ kể cả khi máy
+  # khoá/app bị kill trên Android; CallKit trên iOS). Xem services/callkit_service.dart
+  # và docs/callkit_setup.md.
+  #
+  # ⚠️ Version dưới đây là mốc lúc viết code này — trước khi build, chạy
+  # `flutter pub add flutter_callkit_incoming` để pub tự lấy đúng bản mới
+  # nhất tương thích, tránh dùng nhầm bản cũ.
+  flutter_callkit_incoming: ^2.0.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

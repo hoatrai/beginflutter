@@ -24,6 +24,18 @@ class WebRTCSignalBus {
 
   int _refCounter = 1000; // tránh trùng ref với chat
 
+  // 🆕 FIX: hàng đợi tín hiệu webrtc_offer/answer/ice đến TRƯỚC khi `pc`
+  // (RTCPeerConnection) được tạo xong. Trước đây `handle()` có
+  // `if (pc == null) return;` khiến những tín hiệu đến sớm bị VỨT THẲNG,
+  // không hề được lưu lại — đây chính là nguyên nhân "thỉnh thoảng bắt
+  // máy xong không thấy hình/không có tiếng": bên gọi tạo & gửi offer
+  // nhanh hơn thời gian bên nghe xin quyền camera/mic + tạo xong pc (đặc
+  // biệt máy yếu hoặc lần đầu hiện popup xin quyền), offer/ice tới sớm bị
+  // mất, không có SDP exchange nên không bao giờ có track. Giờ những tín
+  // hiệu đến sớm được xếp hàng, và được xử lý lại (theo đúng thứ tự) ngay
+  // khi `pc` sẵn sàng qua `flushPending()`.
+  final List<Map<String, dynamic>> _pendingSignals = [];
+
   /// Gắn socket khi mở call.
   ///
   /// ⚠️ KHÔNG tự `channel.stream.listen(...)` ở đây. WebSocketChannel.stream
@@ -59,25 +71,60 @@ class WebRTCSignalBus {
   /// Nhận signal từ server (data là chuỗi JSON thô, y nguyên những gì
   /// ChatPage._onData nhận được từ socket — bus này tự decode lại).
   void handle(dynamic data) async {
-    dynamic msg;
+    Map<String, dynamic> msg;
     try {
-      msg = jsonDecode(data);
+      msg = jsonDecode(data) as Map<String, dynamic>;
     } catch (_) {
       return;
     }
 
     final event = msg["event"];
-    final payload = msg["payload"] ?? {};
 
     // call_end / call_reject cần xử lý dù `pc` chưa được tạo (ví dụ người
     // gọi hủy trước khi người nghe kịp bấm "Nghe" / mở VideoCallPage).
     if (event == "call_end" || event == "call_reject") {
       _callEndedCtrl.add(event.toString());
+      // Cuộc gọi đã kết thúc/bị từ chối trước khi kịp xử lý -> hàng đợi
+      // (nếu có) không còn ý nghĩa gì nữa, dọn luôn tránh rò rỉ.
+      _pendingSignals.clear();
       return;
     }
 
-    if (pc == null) return;
     if (!event.toString().startsWith("webrtc_")) return;
+
+    // 🆕 FIX: `pc` chưa sẵn sàng (VideoCallPage còn đang xin quyền
+    // camera/mic / tạo peer connection) -> XẾP HÀNG thay vì vứt bỏ.
+    // `flushPending()` sẽ xử lý lại đúng thứ tự ngay khi `pc` có giá trị.
+    if (pc == null) {
+      print("⏳ WebRTC Signal queued (pc chưa sẵn sàng): $event");
+      _pendingSignals.add(msg);
+      return;
+    }
+
+    await _process(msg);
+  }
+
+  /// Xử lý lại toàn bộ tín hiệu đã bị xếp hàng vì tới sớm (trước khi `pc`
+  /// được tạo xong). PHẢI gọi hàm này ngay sau khi gán
+  /// `WebRTCSignalBus.instance.pc = pc;` trong VideoCallPage._init(),
+  /// nếu không những offer/ice đến sớm sẽ nằm im trong hàng đợi mãi mãi.
+  Future<void> flushPending() async {
+    if (_pendingSignals.isEmpty) return;
+    final queued = List<Map<String, dynamic>>.from(_pendingSignals);
+    _pendingSignals.clear();
+    print("🔁 Flushing ${queued.length} tín hiệu webrtc bị xếp hàng trước đó");
+    for (final msg in queued) {
+      await _process(msg);
+    }
+  }
+
+  /// Xử lý thật sự 1 message webrtc_* — tách riêng khỏi handle() để dùng
+  /// chung được cho cả luồng "đến trực tiếp" lẫn luồng "flush hàng đợi".
+  Future<void> _process(Map<String, dynamic> msg) async {
+    final event = msg["event"];
+    final payload = msg["payload"] ?? {};
+
+    if (pc == null) return; // an toàn: lẽ ra không xảy ra khi gọi từ đây
 
     print("📩 WebRTC Signal: $event");
 
@@ -131,5 +178,8 @@ class WebRTCSignalBus {
     pc = null;
     socket = null;
     topic = null;
+    // 🆕 Dọn nốt hàng đợi (nếu còn sót) — tránh tín hiệu của cuộc gọi cũ
+    // bị flush nhầm vào peer connection của cuộc gọi kế tiếp.
+    _pendingSignals.clear();
   }
 }

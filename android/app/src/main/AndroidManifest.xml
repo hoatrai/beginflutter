@@ -10,6 +10,21 @@
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"/>
     <uses-permission android:name="android.permission.READ_MEDIA_VIDEO"/>
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>
+    <!-- ✅ THÊM cho CallKit / thông báo cuộc gọi -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <!-- ✅ THÊM: bắt buộc từ Android 14 (API 34) để chạy foreground service
+         loại "camera"/"microphone" — dùng để giữ cuộc gọi video/voice sống
+         khi app bị đẩy xuống nền. Thiếu 2 dòng này thì
+         FlutterForegroundTask.startService(serviceTypes: [camera, microphone])
+         sẽ throw MissingForegroundServiceTypeException / SecurityException
+         trên máy Android 14+. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE"/>
+    <uses-permission android:name="android.permission.WAKE_LOCK"/>
+    <uses-permission android:name="android.permission.VIBRATE"/>
+    <uses-permission android:name="android.permission.DISABLE_KEYGUARD"/>
 
 
     <application
@@ -30,9 +45,9 @@
                  while the Flutter UI initializes. After that, this theme continues
                  to determine the Window background behind the Flutter UI. -->
             <meta-data
-              android:name="io.flutter.embedding.android.NormalTheme"
-              android:resource="@style/NormalTheme"
-              />
+                android:name="io.flutter.embedding.android.NormalTheme"
+                android:resource="@style/NormalTheme"
+                />
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
@@ -43,6 +58,16 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
+
+        <!-- ✅ THÊM: khai báo service của flutter_foreground_task (KHÔNG được
+             đổi tên class này). Không có dòng này, FlutterForegroundTask.startService()
+             gọi từ Dart sẽ fail vì Android không tìm thấy Service tương ứng —
+             đây là lý do package đã khai báo trong pubspec.yaml nhưng chưa
+             từng thực sự chạy được. Xem services/call_foreground_service.dart. -->
+        <service
+            android:name="com.pravera.flutter_foreground_task.service.ForegroundService"
+            android:foregroundServiceType="camera|microphone"
+            android:exported="false" />
     </application>
     <!-- Required to query activities that can process text, see:
          https://developer.android.com/training/package-visibility and
