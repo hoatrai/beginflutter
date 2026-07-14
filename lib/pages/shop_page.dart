@@ -5511,7 +5511,7 @@ class _StatusGlowCard extends StatefulWidget {
 }
 
 class _StatusGlowCardState extends State<_StatusGlowCard>
-    with SingleTickerProviderStateMixin {
+    with TickerProviderStateMixin {
   late AnimationController _controller;
 
   @override
