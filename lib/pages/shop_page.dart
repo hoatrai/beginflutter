@@ -1456,7 +1456,7 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
         // 🚀 CHỈ lấy field cần dùng ở shop page thay vì cả schema WC
         // (description, attributes, variations, links...) → JSON nhẹ
         // hơn đáng kể, parse nhanh hơn, tốn ít băng thông hơn.
-            "&_fields=id,name,price,images,meta_data,categories,date_created"
+            "&_fields=id,name,price,images,meta_data,categories,date_created,party_media_url,party_media_type"
             "&consumer_key=ck_3809ad31dd47ca7d10573e35ccdf746494b305a9"
             "&consumer_secret=cs_a49b903ddc7972646359f360d79343cd1e33b6f8",
       );
@@ -2654,6 +2654,13 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
     productMap['participants'] = participants;
     productMap['joined_count'] = participants.length;
 
+    // 🆕 Media "khoảnh khắc bàn nhậu" (ảnh/video) — lấy từ backend nếu đã
+    // được lưu bền (custom REST field trên product), để còn sau khi reload.
+    // Nếu backend chưa trả field này thì mặc định rỗng, và card sẽ chỉ hiện
+    // lại khi có onMediaAdded cập nhật tức thì trong phiên hiện tại.
+    productMap['party_media_url'] = productMap['party_media_url']?.toString() ?? '';
+    productMap['party_media_type'] = productMap['party_media_type']?.toString() ?? '';
+
     // Categories
     if (productMap['categories'] != null && productMap['categories'] is List) {
       productMap['category_names'] =
@@ -3460,10 +3467,23 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
 
     final rawImages = product["images"];
     final List imagesList = rawImages is List ? rawImages : [];
-    final List<String> urls = imagesList
-        .map((e) => (e is Map ? e["src"] : null)?.toString() ?? '')
-        .where((s) => s.isNotEmpty)
-        .toList();
+
+    // 🆕 Ảnh "khoảnh khắc bàn nhậu" vừa upload từ ProductDetailPage — ưu
+    // tiên hiện đầu tiên, giống cách video party được ưu tiên ở
+    // _buildMediaCollage(). Trước đây urls chỉ lấy product["images"] gốc
+    // nên ảnh upload từ detail page không bao giờ lên card.
+    final String? partyImageUrl =
+    (product['party_media_type'] == 'image' &&
+        (product['party_media_url'] as String?)?.isNotEmpty == true)
+        ? product['party_media_url'] as String
+        : null;
+
+    final List<String> urls = [
+      if (partyImageUrl != null) partyImageUrl,
+      ...imagesList
+          .map((e) => (e is Map ? e["src"] : null)?.toString() ?? '')
+          .where((s) => s.isNotEmpty),
+    ];
 
     if (urls.isEmpty) {
       return Container(
@@ -4094,24 +4114,36 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
 
                             final metaData = product['meta_data'] as List? ?? [];
 
+                            // 🆕 Ưu tiên video "khoảnh khắc bàn nhậu" vừa được participant
+                            // upload (nếu có) trước khi fallback về video chính thức của
+                            // sản phẩm lấy từ meta_data — xem onMediaAdded ở trên, và field
+                            // party_media_url/party_media_type nếu được backend trả kèm sẵn
+                            // trong response list sản phẩm (persist qua lần load sau).
+                            String? cardVideoUrl;
+                            if (product['party_media_type'] == 'video' &&
+                                (product['party_media_url'] as String?)?.isNotEmpty == true) {
+                              cardVideoUrl = product['party_media_url'] as String;
+                            }
+
                             // Lay video dau tien (neu co) tu meta_data, giong
                             // cach parse ben product_detail_page.dart.
-                            String? cardVideoUrl;
-                            for (final item in metaData) {
-                              if (item is Map && item['key'] == 'videos') {
-                                final raw = item['value'];
-                                if (raw != null && raw.toString().isNotEmpty) {
-                                  try {
-                                    final decoded = jsonDecode(raw.toString());
-                                    final List list = decoded is String
-                                        ? (jsonDecode(decoded) as List)
-                                        : (decoded as List);
-                                    if (list.isNotEmpty) {
-                                      cardVideoUrl = list.first.toString();
-                                    }
-                                  } catch (_) {}
+                            if (cardVideoUrl == null) {
+                              for (final item in metaData) {
+                                if (item is Map && item['key'] == 'videos') {
+                                  final raw = item['value'];
+                                  if (raw != null && raw.toString().isNotEmpty) {
+                                    try {
+                                      final decoded = jsonDecode(raw.toString());
+                                      final List list = decoded is String
+                                          ? (jsonDecode(decoded) as List)
+                                          : (decoded as List);
+                                      if (list.isNotEmpty) {
+                                        cardVideoUrl = list.first.toString();
+                                      }
+                                    } catch (_) {}
+                                  }
+                                  break;
                                 }
-                                break;
                               }
                             }
 
@@ -4182,6 +4214,16 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
                                               maxPeople: invite.maxPeople,
                                             );
                                           }
+                                        });
+                                      },
+                                      // 🆕 Vừa upload xong 1 ảnh/video "khoảnh khắc bàn nhậu"
+                                      // bên trong trang chi tiết -> lưu thẳng vào Map `product`
+                                      // (cùng reference với item trong `products`) rồi setState
+                                      // để card ngoài list rebuild ngay, không cần fetch lại API.
+                                      onMediaAdded: (url, type) {
+                                        setState(() {
+                                          product['party_media_url'] = url;
+                                          product['party_media_type'] = type;
                                         });
                                       },
                                     ),

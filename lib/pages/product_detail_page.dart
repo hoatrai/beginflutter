@@ -228,11 +228,16 @@ class _PendingMedia {
 class ProductDetailPage extends StatefulWidget {
   final Map<String, dynamic> product;
   final void Function(Map<String, dynamic> updatedProduct)? onJoin;
+  // 🆕 Báo ngược ra trang danh sách (ShopPage) ngay khi 1 ảnh/video "khoảnh
+  // khắc bàn nhậu" upload thành công, để card ngoài list cập nhật tức thì
+  // mà không cần load lại toàn bộ danh sách sản phẩm.
+  final void Function(String url, String type)? onMediaAdded;
 
   const ProductDetailPage({
     super.key,
     required this.product,
     this.onJoin,
+    this.onMediaAdded,
   });
 
   @override
@@ -1008,6 +1013,9 @@ class _ProductDetailPageState extends State<ProductDetailPage>
         throw Exception(data['message'] ?? 'Không lưu được media');
       }
       await _fetchInviteMedia();
+      // 🆕 Báo ngược ra ShopPage (nếu có) để card ngoài list hiện video/ảnh
+      // mới này ngay, không cần đợi user quay lại rồi pull-to-refresh.
+      widget.onMediaAdded?.call(mediaUrl, type);
       if (mounted) setState(() => _pendingMedia.remove(pending));
       _showSnack(type == 'video' ? '🎥 Video đã đăng' : '📸 Ảnh đã đăng');
     } catch (e) {
