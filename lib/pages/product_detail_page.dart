@@ -8,13 +8,16 @@ import 'dart:io';
 import 'dart:math';
 
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_html/flutter_html.dart';
 import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
 import 'package:shimmer/shimmer.dart' as shimmer;
+import 'package:video_compress/video_compress.dart';
 import 'package:video_player/video_player.dart';
+import 'package:video_thumbnail/video_thumbnail.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import '../helpers/storage_helper.dart';
@@ -58,8 +61,12 @@ abstract class _ApiUrls {
   static const spinWheel         = '${AppConfig.webDomain}/wp-json/spiritwebs/v1/spin';
   static const socketUrl         = AppConfig.websocketUrl;
   static const defaultAvatar     = '${AppConfig.webDomain}/media/2025/10/default-avatar.png';
-  static const cloudinaryCloud   = 'datm1erra';
-  static const cloudinaryPreset  = 'flutter_upload';
+
+  // 🆕 Upload video lên server riêng (giống create_invite_page) thay vì
+  // Cloudinary — cùng endpoint REST WordPress + Application Password.
+  static const videoUpload       = '${AppConfig.webDomain}/wp-json/nhau/v1/upload-video';
+  static const wpUsername        = 'admin';
+  static const wpAppPassword     = 'hWfZ33bkTXZGsuK18zFilY1D';
 }
 
 // =============================================================================
@@ -192,6 +199,28 @@ class MediaItem {
   );
 }
 
+// 🆕 Media đang được chọn/nén/tải lên — hiển thị ngay (đẩy lên đầu danh sách)
+// trước khi server trả URL thật, để user thấy phản hồi tức thì thay vì chờ.
+class _PendingMedia {
+  final File file;
+  final String type; // 'image' | 'video'
+  Uint8List? thumbnail;
+  bool generatingThumb;
+  double progress; // 0.0 - 1.0, chỉ dùng cho video
+  bool uploading;
+  bool error;
+
+  _PendingMedia({
+    required this.file,
+    required this.type,
+    this.thumbnail,
+    this.generatingThumb = false,
+    this.progress = 0.0,
+    this.uploading = true,
+    this.error = false,
+  });
+}
+
 // =============================================================================
 // WIDGET CHÍNH
 // =============================================================================
@@ -216,12 +245,20 @@ class _ProductDetailPageState extends State<ProductDetailPage>
   int _currentMediaIndex = 0;
   List<Participant> _participants = [];
   List<MediaItem> _inviteMedia = [];
+  final List<_PendingMedia> _pendingMedia = []; // 🆕 upload đang chạy, hiển thị optimistic
+
+  // 🆕 Cache thumbnail cho video ĐÃ được server confirm (trong _inviteMedia).
+  // Key theo item.id — mỗi video có id riêng nên video thêm SAU không bao
+  // giờ vô tình hiện lại ảnh thumbnail của video thêm TRƯỚC.
+  final Map<int, Uint8List?> _confirmedVideoThumbCache = {};
 
   bool _isLoadingJoin          = false;
   bool _isUploadingMedia       = false;
   bool _isUpdatingAttendance   = false;
   bool _isUpdatingInviteStatus = false;
-  bool _videoInited            = false;
+  // 🔧 FIX: theo dõi danh sách URL video đã init lần gần nhất, thay cho cờ
+  // boolean cũ chỉ cho phép init MỘT LẦN trong suốt vòng đời State.
+  List<String> _initedVideoUrls = [];
 
   bool isJoined    = false;
   bool isHost      = false;
@@ -294,6 +331,7 @@ class _ProductDetailPageState extends State<ProductDetailPage>
     _pageController.dispose();
     for (final c in _videoMap.values) c.dispose();
     _videoMap.clear();
+    VideoCompress.deleteAllCache();
     super.dispose();
   }
 
@@ -301,8 +339,20 @@ class _ProductDetailPageState extends State<ProductDetailPage>
   // VIDEO — initialise & control
   // ==========================================================================
 
-  /// Call once after the mediaList is built.
+  /// Khởi tạo lại toàn bộ video của carousel.
+  /// 🔧 FIX: trước đây hàm này chỉ được gọi MỘT LẦN nhờ cờ `_videoInited`,
+  /// nên nếu sản phẩm được sửa sau đó (danh sách video/ảnh trong
+  /// `widget.product` thay đổi — ví dụ user edit lại bài đăng) thì carousel
+  /// vẫn tiếp tục phát video CŨ vì `_videoMap` không được dispose/tạo lại.
+  /// Giờ hàm này được gọi lại bất cứ khi nào danh sách URL video thực sự
+  /// đổi (xem chỗ gọi trong `build()`), và luôn dispose sạch controller cũ
+  /// trước khi tạo controller mới để không bị lẫn video của lần load trước.
   void _initVideos(List<Map<String, dynamic>> mediaList) {
+    for (final c in _videoMap.values) {
+      c.dispose();
+    }
+    _videoMap.clear();
+
     for (int i = 0; i < mediaList.length; i++) {
       final item = mediaList[i];
       if (item['type'] != 'video') continue;
@@ -599,6 +649,31 @@ class _ProductDetailPageState extends State<ProductDetailPage>
     }
   }
 
+  /// 🆕 Sinh thumbnail thật cho video đã upload xong (server confirm), để
+  /// mục "Khoảnh khắc bàn nhậu" hiện ảnh thay vì chỉ ô đen + icon play.
+  /// Cache theo `item.id` — KHÔNG dùng biến/field dùng chung — nên video
+  /// được thêm sau luôn hiện đúng ảnh của chính nó, không bị lẫn với ảnh
+  /// của video thêm trước đó.
+  Future<Uint8List?> _getConfirmedVideoThumb(MediaItem item) async {
+    if (_confirmedVideoThumbCache.containsKey(item.id)) {
+      return _confirmedVideoThumbCache[item.id];
+    }
+    try {
+      final thumb = await VideoThumbnail.thumbnailData(
+        video: item.url,
+        imageFormat: ImageFormat.JPEG,
+        maxWidth: 200,
+        quality: 40,
+      );
+      _confirmedVideoThumbCache[item.id] = thumb;
+      return thumb;
+    } catch (e) {
+      debugPrint('⚠️ _getConfirmedVideoThumb: $e');
+      _confirmedVideoThumbCache[item.id] = null;
+      return null;
+    }
+  }
+
   // ==========================================================================
   // API — ACTIONS
   // ==========================================================================
@@ -851,23 +926,69 @@ class _ProductDetailPageState extends State<ProductDetailPage>
         ? await picker.pickVideo(source: ImageSource.gallery)
         : await picker.pickImage(source: ImageSource.gallery, imageQuality: 85);
     if (file == null) return;
-    await _uploadMedia(File(file.path), type);
+
+    // 🆕 Đẩy ngay item lên ĐẦU danh sách hiển thị (trước cả _inviteMedia đã
+    // có) để user thấy media của mình xuất hiện tức thì, không cần đợi
+    // upload + fetch lại từ server.
+    final pending = _PendingMedia(
+      file: File(file.path),
+      type: type,
+      generatingThumb: type == 'video',
+    );
+    setState(() => _pendingMedia.insert(0, pending));
+
+    if (type == 'video') {
+      final thumb = await VideoThumbnail.thumbnailData(
+        video: pending.file.path,
+        imageFormat: ImageFormat.JPEG,
+        maxWidth: 200,
+        quality: 25,
+      );
+      if (!mounted) return;
+      setState(() {
+        pending.thumbnail = thumb;
+        pending.generatingThumb = false;
+      });
+    }
+
+    await _uploadMedia(pending);
   }
 
-  Future<void> _uploadMedia(File file, String type) async {
+  Future<void> _uploadMedia(_PendingMedia pending) async {
+    final type = pending.type;
     setState(() => _isUploadingMedia = true);
     try {
       final headers = await _authHeaders();
       String mediaUrl;
 
       if (type == 'video') {
-        mediaUrl = await _uploadVideoToCloudinary(file);
+        // 🆕 Nén video trước khi upload để giảm tải server và tăng tốc độ
+        // gửi. Nếu nén lỗi, fallback dùng file gốc để không chặn user.
+        File fileToUpload = pending.file;
+        try {
+          final info = await VideoCompress.compressVideo(
+            fileToUpload.path,
+            quality: VideoQuality.MediumQuality,
+            deleteOrigin: false,
+            includeAudio: true,
+          );
+          if (info?.file != null) fileToUpload = info!.file!;
+        } catch (_) {
+          // nén thất bại -> vẫn upload file gốc
+        }
+        mediaUrl = await _uploadVideoToOwnServer(
+          fileToUpload,
+          onProgress: (p) {
+            if (!mounted) return;
+            setState(() => pending.progress = p);
+          },
+        );
       } else {
         final req =
         http.MultipartRequest('POST', Uri.parse(_ApiUrls.imageUpload))
           ..headers.addAll({'Authorization': headers['Authorization']!})
           ..files
-              .add(await http.MultipartFile.fromPath('file', file.path));
+              .add(await http.MultipartFile.fromPath('file', pending.file.path));
         final res  = await http.Response.fromStream(await req.send());
         final data = jsonDecode(res.body) as Map<String, dynamic>;
         if (data['success'] != true) {
@@ -887,28 +1008,76 @@ class _ProductDetailPageState extends State<ProductDetailPage>
         throw Exception(data['message'] ?? 'Không lưu được media');
       }
       await _fetchInviteMedia();
+      if (mounted) setState(() => _pendingMedia.remove(pending));
       _showSnack(type == 'video' ? '🎥 Video đã đăng' : '📸 Ảnh đã đăng');
     } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        pending.uploading = false;
+        pending.error = true;
+      });
+      // 🆕 Hiện rõ lỗi thật ngay trên thumbnail (icon lỗi + nút xóa) thay vì
+      // chỉ báo snack rồi làm item biến mất im lặng.
       _showSnack('❌ $e');
     } finally {
-      if (mounted) setState(() => _isUploadingMedia = false);
+      if (mounted) {
+        setState(() => _isUploadingMedia = _pendingMedia.any((p) => p.uploading));
+      }
     }
   }
 
-  Future<String> _uploadVideoToCloudinary(File file) async {
-    final uri = Uri.parse(
-      'https://api.cloudinary.com/v1_1/${_ApiUrls.cloudinaryCloud}/video/upload',
+  // ─── UPLOAD VIDEO LÊN SERVER RIÊNG (thay cho Cloudinary) ────────────────────
+  // Cùng endpoint/cách xác thực với create_invite_page: multipart tới REST
+  // endpoint WordPress tự viết, xác thực bằng Application Password.
+  Future<String> _uploadVideoToOwnServer(
+      File videoFile, {
+        void Function(double progress)? onProgress,
+      }) async {
+    final uri = Uri.parse(_ApiUrls.videoUpload);
+    final credentials = base64Encode(
+        utf8.encode('${_ApiUrls.wpUsername}:${_ApiUrls.wpAppPassword}'));
+
+    final multipart = http.MultipartRequest('POST', uri);
+    multipart.headers['Authorization'] = 'Basic $credentials';
+    multipart.files.add(await http.MultipartFile.fromPath('file', videoFile.path));
+
+    final totalBytes = multipart.contentLength;
+    int bytesSent = 0;
+
+    // Bọc byte stream gốc để đếm số byte đã gửi đi, từ đó tính % tiến trình
+    final trackedStream = multipart.finalize().transform(
+      StreamTransformer<List<int>, List<int>>.fromHandlers(
+        handleData: (chunk, sink) {
+          bytesSent += chunk.length;
+          if (totalBytes > 0) onProgress?.call((bytesSent / totalBytes).clamp(0.0, 1.0));
+          sink.add(chunk);
+        },
+      ),
     );
-    final req = http.MultipartRequest('POST', uri)
-      ..fields['upload_preset'] = _ApiUrls.cloudinaryPreset
-      ..files.add(await http.MultipartFile.fromPath('file', file.path));
-    final res  = await req.send();
-    final body = await res.stream.bytesToString();
-    final data = jsonDecode(body) as Map<String, dynamic>;
-    if (res.statusCode != 200 && res.statusCode != 201) {
-      throw Exception('Upload video failed: $body');
+
+    // http.MultipartRequest không cho hook progress trực tiếp nên phải dựng
+    // lại thành StreamedRequest với cùng headers/contentLength.
+    final streamedRequest = http.StreamedRequest('POST', uri);
+    streamedRequest.headers.addAll(multipart.headers);
+    streamedRequest.contentLength = totalBytes;
+
+    trackedStream.listen(
+      streamedRequest.sink.add,
+      onDone: () => streamedRequest.sink.close(),
+      onError: (e, st) => streamedRequest.sink.addError(e, st),
+      cancelOnError: true,
+    );
+
+    final response = await http.Client().send(streamedRequest);
+    final resBody = await response.stream.bytesToString();
+
+    if (response.statusCode == 200 || response.statusCode == 201) {
+      final data = jsonDecode(resBody);
+      final String? videoUrl = data['url'];
+      if (videoUrl == null) throw Exception('Không nhận được URL video từ server');
+      return videoUrl;
     }
-    return data['secure_url'] as String;
+    throw Exception('Upload video failed (${response.statusCode}): $resBody');
   }
 
   Future<void> _deleteMedia(int mediaId) async {
@@ -998,9 +1167,13 @@ class _ProductDetailPageState extends State<ProductDetailPage>
       ...images.map((e) => {'type': 'image', 'url': (e as Map)['src']}),
     ];
 
-    if (!_videoInited) {
+    // 🔧 FIX: so sánh danh sách URL video hiện tại với lần init trước, thay
+    // vì dùng cờ `_videoInited` chỉ chạy một lần. Nếu sản phẩm được sửa sau
+    // (videoUrls đổi), ta re-init lại carousel; nếu không đổi thì bỏ qua để
+    // tránh dispose/tạo lại controller không cần thiết mỗi lần rebuild.
+    if (!listEquals(_initedVideoUrls, videoUrls)) {
+      _initedVideoUrls = List<String>.from(videoUrls);
       WidgetsBinding.instance.addPostFrameCallback((_) => _initVideos(mediaList));
-      _videoInited = true;
     }
 
     String? priceRange;
@@ -1371,18 +1544,8 @@ class _ProductDetailPageState extends State<ProductDetailPage>
                 ),
             ],
           ),
-          if (_isUploadingMedia) ...[
-            const SizedBox(height: 10),
-            const LinearProgressIndicator(
-              minHeight: 4,
-              borderRadius: BorderRadius.all(Radius.circular(4)),
-            ),
-            const SizedBox(height: 6),
-            const Text('Đang đăng khoảnh khắc...',
-                style: TextStyle(color: Colors.white54, fontSize: 12)),
-          ],
           const SizedBox(height: 12),
-          _inviteMedia.isEmpty
+          (_pendingMedia.isEmpty && _inviteMedia.isEmpty)
               ? Container(
             height: 90,
             alignment: Alignment.center,
@@ -1393,17 +1556,104 @@ class _ProductDetailPageState extends State<ProductDetailPage>
             child: const Text('Chưa có ảnh hoặc video',
                 style: TextStyle(color: Colors.white38)),
           )
+          // 🆕 _pendingMedia đứng trước _inviteMedia -> media vừa chọn
+          // hiện ngay ở đầu (bên trái, trong tầm nhìn đầu tiên) thay vì
+          // phải đợi upload xong rồi mới thấy sau khi fetch lại.
               : SizedBox(
             height: 110,
             child: ListView.separated(
               scrollDirection: Axis.horizontal,
-              itemCount: _inviteMedia.length,
+              itemCount: _pendingMedia.length + _inviteMedia.length,
               separatorBuilder: (_, __) => const SizedBox(width: 8),
-              itemBuilder: (_, i) =>
-                  _buildMediaThumbnail(_inviteMedia[i]),
+              itemBuilder: (_, i) {
+                if (i < _pendingMedia.length) {
+                  return _buildPendingMediaThumb(_pendingMedia[i]);
+                }
+                return _buildMediaThumbnail(
+                    _inviteMedia[i - _pendingMedia.length]);
+              },
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  // 🆕 Thumbnail cho media đang chọn / nén / tải lên (chưa có id server).
+  Widget _buildPendingMediaThumb(_PendingMedia item) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(12),
+      child: SizedBox(
+        width: 100,
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            if (item.type == 'video')
+              item.generatingThumb
+                  ? shimmer.Shimmer.fromColors(
+                baseColor: Colors.white.withOpacity(0.15),
+                highlightColor: Colors.white.withOpacity(0.35),
+                child: Container(color: Colors.white),
+              )
+                  : item.thumbnail != null
+                  ? Image.memory(item.thumbnail!, fit: BoxFit.cover)
+                  : Container(
+                color: Colors.white.withOpacity(0.08),
+                child: const Icon(Icons.videocam_rounded, color: Colors.white54),
+              )
+            else
+              Image.file(item.file, fit: BoxFit.cover),
+            if (item.uploading)
+              Container(
+                color: Colors.black.withOpacity(0.55),
+                child: Center(
+                  child: item.type == 'video'
+                      ? Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      SizedBox(
+                        width: 26, height: 26,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2.5,
+                          value: item.progress > 0 ? item.progress : null,
+                          color: Colors.orangeAccent,
+                          backgroundColor: Colors.white.withOpacity(0.15),
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        '${(item.progress * 100).clamp(0, 100).toStringAsFixed(0)}%',
+                        style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w600),
+                      ),
+                    ],
+                  )
+                      : const SizedBox(
+                    width: 22, height: 22,
+                    child: CircularProgressIndicator(strokeWidth: 2.5, color: Colors.orangeAccent),
+                  ),
+                ),
+              ),
+            if (item.error) ...[
+              Container(
+                color: Colors.black.withOpacity(0.6),
+                child: const Center(
+                  child: Icon(Icons.error_rounded, color: Colors.redAccent, size: 28),
+                ),
+              ),
+              Positioned(
+                top: 4, right: 4,
+                child: GestureDetector(
+                  onTap: () => setState(() => _pendingMedia.remove(item)),
+                  child: Container(
+                    padding: const EdgeInsets.all(4),
+                    decoration: BoxDecoration(color: Colors.black.withOpacity(0.6), shape: BoxShape.circle),
+                    child: const Icon(Icons.close, size: 12, color: Colors.white),
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
       ),
     );
   }
@@ -1430,7 +1680,28 @@ class _ProductDetailPageState extends State<ProductDetailPage>
               child: Stack(
                 fit: StackFit.expand,
                 children: [
-                  Container(color: Colors.black38),
+                  // 🆕 Ảnh thumbnail thật của video (thay vì chỉ ô đen).
+                  // `key` + cache theo item.id để đảm bảo video thêm sau
+                  // không hiện nhầm ảnh của video thêm trước.
+                  FutureBuilder<Uint8List?>(
+                    key: ValueKey('video_thumb_${item.id}'),
+                    future: _getConfirmedVideoThumb(item),
+                    builder: (context, snapshot) {
+                      if (snapshot.connectionState != ConnectionState.done) {
+                        return shimmer.Shimmer.fromColors(
+                          baseColor: Colors.white.withOpacity(0.08),
+                          highlightColor: Colors.white.withOpacity(0.25),
+                          child: Container(color: Colors.white),
+                        );
+                      }
+                      final bytes = snapshot.data;
+                      if (bytes == null) {
+                        return Container(color: Colors.black38);
+                      }
+                      return Image.memory(bytes, fit: BoxFit.cover);
+                    },
+                  ),
+                  Container(color: Colors.black.withOpacity(0.18)),
                   const Center(
                     child: Icon(Icons.play_circle_fill,
                         size: 44, color: Colors.white),

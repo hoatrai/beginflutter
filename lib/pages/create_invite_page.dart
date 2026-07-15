@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:video_thumbnail/video_thumbnail.dart';
+import 'package:video_compress/video_compress.dart';
 import 'package:flutter/foundation.dart';
 import 'dart:convert';
 import 'dart:async';
@@ -62,7 +63,8 @@ class UploadVideoItem {
   bool error;
   Uint8List? thumbnail;
   bool generatingThumb;
-  UploadVideoItem({required this.file, this.url, this.uploading = true, this.error = false, this.thumbnail, this.generatingThumb = true});
+  double progress; // 0.0 - 1.0
+  UploadVideoItem({required this.file, this.url, this.uploading = true, this.error = false, this.thumbnail, this.generatingThumb = true, this.progress = 0.0});
 }
 
 // ─── MAIN WIDGET ──────────────────────────────────────────────────────────────
@@ -156,6 +158,7 @@ class _CreateInvitePageState extends State<CreateInvitePage> with TickerProvider
     _addressController.dispose(); _timeController.dispose();
     _contactController.dispose(); _noteController.dispose();
     _channel.sink.close();
+    VideoCompress.deleteAllCache();
     super.dispose();
   }
 
@@ -223,25 +226,101 @@ class _CreateInvitePageState extends State<CreateInvitePage> with TickerProvider
     final thumb = await VideoThumbnail.thumbnailData(video: file.path, imageFormat: ImageFormat.JPEG, maxWidth: 200, quality: 25);
     setState(() { item.thumbnail = thumb; item.generatingThumb = false; });
     try {
-      final url = await uploadVideoToCloudinary(file);
-      setState(() { item.url = url; item.uploading = false; });
+      // 🆕 Nén video trước khi upload để giảm tải server và tăng tốc độ gửi.
+      // Nếu nén lỗi vì lý do gì đó, fallback dùng file gốc để không chặn user.
+      File fileToUpload = file;
+      try {
+        final info = await VideoCompress.compressVideo(
+          file.path,
+          quality: VideoQuality.MediumQuality,
+          deleteOrigin: false,
+          includeAudio: true,
+        );
+        if (info?.file != null) fileToUpload = info!.file!;
+      } catch (_) {
+        // nén thất bại -> vẫn upload file gốc
+      }
+
+      final url = await uploadVideoToOwnServer(
+        fileToUpload,
+        onProgress: (p) {
+          if (!mounted) return;
+          setState(() => item.progress = p);
+        },
+      );
+      if (!mounted) return;
+      setState(() { item.url = url; item.uploading = false; item.progress = 1.0; });
     } catch (e) {
+      if (!mounted) return;
       setState(() { item.uploading = false; item.error = true; });
+      // 🆕 Hiện rõ lỗi thật (vd. token sai/hết hạn, mất mạng, vượt dung
+      // lượng...) thay vì chỉ đổi UI sang trạng thái lỗi im lặng — trước
+      // đây user không biết video fail vì sao, và vì canSubmit không chặn
+      // theo error nên vẫn bấm "Tạo lời mời" được, kèo tạo ra thiếu video.
+      _showSnack('Upload video thất bại: $e', isError: true);
     }
   }
 
-  Future<String> uploadVideoToCloudinary(File videoFile) async {
-    const cloudName = "datm1erra";
-    const uploadPreset = "flutter_upload";
-    final uri = Uri.parse("https://api.cloudinary.com/v1_1/$cloudName/video/upload");
-    final request = http.MultipartRequest("POST", uri);
-    request.fields['upload_preset'] = uploadPreset;
-    request.files.add(await http.MultipartFile.fromPath('file', videoFile.path));
-    final response = await request.send();
+  // ─── UPLOAD VIDEO LÊN SERVER RIÊNG (thay cho Cloudflare Stream) ─────────────
+  // Video được gửi (multipart) tới 1 REST endpoint tự viết trên WordPress,
+  // endpoint này lưu file thẳng vào wp-content/uploads/BeerGoVideo trên máy
+  // chủ Ubuntu và trả về URL công khai của file (xem file endpoint PHP đi kèm).
+  static const String _videoUploadEndpoint = '${AppConfig.webDomain}/wp-json/nhau/v1/upload-video';
+  // Dùng cùng tài khoản Application Password như upload ảnh (_uploadImage) để
+  // xác thực với WordPress — endpoint PHP sẽ kiểm tra quyền qua header này.
+  static const String _wpUsername = 'admin';
+  static const String _wpAppPassword = 'hWfZ33bkTXZGsuK18zFilY1D';
+
+  /// Upload video lên server WordPress/Ubuntu của chính mình, báo tiến trình
+  /// qua [onProgress] (0.0 → 1.0). Trả về URL công khai của video đã lưu.
+  Future<String> uploadVideoToOwnServer(
+      File videoFile, {
+        void Function(double progress)? onProgress,
+      }) async {
+    final uri = Uri.parse(_videoUploadEndpoint);
+    final credentials = base64Encode(utf8.encode('$_wpUsername:$_wpAppPassword'));
+
+    final multipart = http.MultipartRequest('POST', uri);
+    multipart.headers['Authorization'] = 'Basic $credentials';
+    multipart.files.add(await http.MultipartFile.fromPath('file', videoFile.path));
+
+    final totalBytes = multipart.contentLength;
+    int bytesSent = 0;
+
+    // Bọc byte stream gốc để đếm số byte đã gửi đi, từ đó tính % tiến trình
+    final trackedStream = multipart.finalize().transform(
+      StreamTransformer<List<int>, List<int>>.fromHandlers(
+        handleData: (chunk, sink) {
+          bytesSent += chunk.length;
+          if (totalBytes > 0) onProgress?.call((bytesSent / totalBytes).clamp(0.0, 1.0));
+          sink.add(chunk);
+        },
+      ),
+    );
+
+    // http.MultipartRequest không cho hook progress trực tiếp nên phải dựng lại
+    // thành StreamedRequest với cùng headers/contentLength để giữ nguyên hành vi gửi.
+    final streamedRequest = http.StreamedRequest('POST', uri);
+    streamedRequest.headers.addAll(multipart.headers);
+    streamedRequest.contentLength = totalBytes;
+
+    trackedStream.listen(
+      streamedRequest.sink.add,
+      onDone: () => streamedRequest.sink.close(),
+      onError: (e, st) => streamedRequest.sink.addError(e, st),
+      cancelOnError: true,
+    );
+
+    final response = await http.Client().send(streamedRequest);
     final resBody = await response.stream.bytesToString();
-    final data = jsonDecode(resBody);
-    if (response.statusCode == 200 || response.statusCode == 201) return data['secure_url'];
-    throw Exception("Upload video failed: $resBody");
+
+    if (response.statusCode == 200 || response.statusCode == 201) {
+      final data = jsonDecode(resBody);
+      final String? videoUrl = data['url'];
+      if (videoUrl == null) throw Exception('Không nhận được URL video từ server');
+      return videoUrl;
+    }
+    throw Exception('Upload video failed (${response.statusCode}): $resBody');
   }
 
   Future<File> _downloadImageToFile(String url) async {
@@ -431,6 +510,24 @@ class _CreateInvitePageState extends State<CreateInvitePage> with TickerProvider
 
   void _showSnack(String msg, {bool isError = false}) {
     if (!mounted) return;
+    // 🆕 DEBUG TẠM: lỗi (đặc biệt lỗi upload video) hiện qua Dialog thay vì
+    // SnackBar để đứng yên, đọc được toàn bộ nội dung + copy ra ngoài được.
+    // Sau khi xác định xong nguyên nhân thì đổi lại thành SnackBar như cũ.
+    if (isError) {
+      debugPrint('❌ ERROR: $msg');
+      showDialog(
+        context: context,
+        builder: (_) => AlertDialog(
+          backgroundColor: _AppColors.surface,
+          title: const Text('Lỗi', style: TextStyle(color: _AppColors.error)),
+          content: SelectableText(msg, style: const TextStyle(color: _AppColors.textPrimary)),
+          actions: [
+            TextButton(onPressed: () => Navigator.of(context).pop(), child: const Text('Đóng')),
+          ],
+        ),
+      );
+      return;
+    }
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content: Text(msg, style: const TextStyle(color: _AppColors.textPrimary, fontWeight: FontWeight.w500)),
       backgroundColor: isError ? _AppColors.error.withOpacity(0.9) : _AppColors.surface,
@@ -870,7 +967,27 @@ class _CreateInvitePageState extends State<CreateInvitePage> with TickerProvider
             Positioned.fill(
               child: Container(
                 decoration: BoxDecoration(color: Colors.black.withOpacity(0.55), borderRadius: BorderRadius.circular(10)),
-                child: const Center(child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: _AppColors.primary))),
+                child: Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      SizedBox(
+                        width: 28, height: 28,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2.5,
+                          value: item.progress > 0 ? item.progress : null, // null = spinner vô định khi chưa có % (đang chuẩn bị)
+                          color: _AppColors.primary,
+                          backgroundColor: Colors.white.withOpacity(0.15),
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        '${(item.progress * 100).clamp(0, 100).toStringAsFixed(0)}%',
+                        style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w600),
+                      ),
+                    ],
+                  ),
+                ),
               ),
             ),
           // Video play icon badge
@@ -993,7 +1110,13 @@ class _CreateInvitePageState extends State<CreateInvitePage> with TickerProvider
 
   // ─── ACTION BUTTONS ─────────────────────────────────────────────────────────
   Widget _buildActionButtons() {
-    final canSubmit = !_isSubmitting && !_images.any((i) => i.uploading) && !_videos.any((v) => v.uploading || v.generatingThumb);
+    // 🆕 Trước đây chỉ chặn khi đang uploading — video bị lỗi (uploading=false,
+    // error=true) vẫn lọt qua, khiến kèo tạo ra thiếu video mà user không hay.
+    // Giờ chặn luôn cả ảnh/video đang lỗi để buộc user xóa hoặc thử lại trước
+    // khi submit.
+    final canSubmit = !_isSubmitting &&
+        !_images.any((i) => i.uploading || i.error) &&
+        !_videos.any((v) => v.uploading || v.generatingThumb || v.error);
 
     return Column(
       children: [

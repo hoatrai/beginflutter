@@ -4190,100 +4190,92 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
                               },
                               child: Container(
                                 margin: const EdgeInsets.only(bottom: 16),
-                                child: _StatusGlowCard(
-                                  active: isLive || isSoon,
-                                  colorLight: isLive ? Colors.lightGreen : const Color(0xFFFFC107),
-                                  colorStrong: isLive ? const Color(0xFF558B2F) : const Color(0xFFFF9800),
-                                  duration: isLive
-                                      ? const Duration(milliseconds: 1400)
-                                      : const Duration(milliseconds: 2400),
-                                  intensity: isLive ? 1.0 : 0.55,
-                                  child: AspectRatio(
-                                    aspectRatio: 1.55,
-                                    child: Stack(
-                                      fit: StackFit.expand,
-                                      children: [
-                                        // Nen khung (lo ra thanh 1 vien mong quanh anh
-                                        // sau khi anh duoc padding vao trong) - dung
-                                        // dung gradient xanh duong -> cam giong nen
-                                        // ngoai cua trang, thay vi mau den rieng.
-                                        ClipRRect(
-                                          borderRadius: BorderRadius.circular(24),
-                                          child: Container(
-                                            decoration: BoxDecoration(
-                                              gradient: LinearGradient(
-                                                colors: [
-                                                  primaryBlue.withOpacity(0.9),
-                                                  accentOrange.withOpacity(0.8),
-                                                ],
-                                                begin: Alignment.topLeft,
-                                                end: Alignment.bottomRight,
-                                              ),
-                                            ),
-                                          ),
-                                        ),
-
-                                        // Anh nen: ghep nhieu anh (collage), duoc "thut"
-                                        // vao trong 1 chut (padding) de lo vien khung ra.
-                                        // Khi dang dien ra: anh ben trong "tho" phong-xep
-                                        // nhe, ClipRRect ben ngoai giu nguyen kich thuoc
-                                        // nen khong tran ra de card ben canh.
-                                        Padding(
-                                          padding: const EdgeInsets.all(6),
-                                          child: ClipRRect(
-                                            borderRadius: BorderRadius.circular(19),
-                                            child: _BreathingScale(
-                                              active: isLive,
-                                              child: _buildMediaCollage(product, cardVideoUrl),
-                                            ),
-                                          ),
-                                        ),
-
-                                        // Lop phu toi dan ve day the (scrim) - chi phu
-                                        // trong vung anh (cung padding voi anh).
-                                        Padding(
-                                          padding: const EdgeInsets.all(6),
-                                          child: IgnorePointer(
-                                            child: DecoratedBox(
+                                child: _RunningBorderCard(
+                                  // 🟢 Dang dien ra: vien "chay" sang quanh khung card.
+                                  active: isLive,
+                                  color: const Color(0xFFFF3B30),
+                                  glow: const Color(0xFFB71C1C),
+                                  duration: const Duration(milliseconds: 4200),
+                                  borderRadius: 24,
+                                  child: _StatusGlowCard(
+                                    // 🟠 Sap dien ra: giu hieu ung tho phong-xep cu.
+                                    active: isSoon,
+                                    colorLight: const Color(0xFFFFC107),
+                                    colorStrong: const Color(0xFFFF9800),
+                                    duration: const Duration(milliseconds: 2400),
+                                    intensity: 0.55,
+                                    child: AspectRatio(
+                                      aspectRatio: 1.55,
+                                      child: Stack(
+                                        fit: StackFit.expand,
+                                        children: [
+                                          // Nen khung (lo ra thanh 1 vien mong quanh anh
+                                          // sau khi anh duoc padding vao trong) - dung
+                                          // dung gradient xanh duong -> cam giong nen
+                                          // ngoai cua trang, thay vi mau den rieng.
+                                          ClipRRect(
+                                            borderRadius: BorderRadius.circular(24),
+                                            child: Container(
                                               decoration: BoxDecoration(
-                                                borderRadius: BorderRadius.circular(19),
                                                 gradient: LinearGradient(
-                                                  begin: Alignment.topCenter,
-                                                  end: Alignment.bottomCenter,
-                                                  stops: const [0.0, 0.36, 0.70, 1.0],
                                                   colors: [
-                                                    Colors.black.withOpacity(0.02),
-                                                    Colors.black.withOpacity(0.10),
-                                                    Colors.black.withOpacity(0.62),
-                                                    Colors.black.withOpacity(0.96),
+                                                    primaryBlue.withOpacity(0.9),
+                                                    accentOrange.withOpacity(0.8),
                                                   ],
+                                                  begin: Alignment.topLeft,
+                                                  end: Alignment.bottomRight,
                                                 ),
                                               ),
                                             ),
                                           ),
-                                        ),
 
-                                        // Vien mau theo the loai: chi 2 goc cheo (trai-tren
-                                        // + phai-duoi), dang "bracket" giong mau ban gui,
-                                        // thay vi vien full bao quanh 4 canh.
-                                        Positioned(
-                                          top: 10,
-                                          left: 10,
-                                          child: IgnorePointer(
-                                            child: _CornerAccent(
-                                              color: categoryColor.withOpacity(isHot ? 1.0 : 0.95),
-                                              glow: categoryColor.withOpacity(0.55),
-                                              armLength: isHot ? 30 : 26,
-                                              thickness: isHot ? 3 : 2.6,
+                                          // Anh nen: ghep nhieu anh (collage), duoc "thut"
+                                          // vao trong 1 chut (padding) de lo vien khung ra.
+                                          // Khi dang dien ra: anh ben trong "tho" phong-xep
+                                          // nhe, ClipRRect ben ngoai giu nguyen kich thuoc
+                                          // nen khong tran ra de card ben canh.
+                                          Padding(
+                                            padding: const EdgeInsets.all(6),
+                                            child: ClipRRect(
+                                              borderRadius: BorderRadius.circular(19),
+                                              child: _BreathingScale(
+                                                active: isLive || isSoon,
+                                                child: _buildMediaCollage(product, cardVideoUrl),
+                                              ),
                                             ),
                                           ),
-                                        ),
-                                        Positioned(
-                                          bottom: 10,
-                                          right: 10,
-                                          child: IgnorePointer(
-                                            child: RotatedBox(
-                                              quarterTurns: 2,
+
+                                          // Lop phu toi dan ve day the (scrim) - chi phu
+                                          // trong vung anh (cung padding voi anh).
+                                          Padding(
+                                            padding: const EdgeInsets.all(6),
+                                            child: IgnorePointer(
+                                              child: DecoratedBox(
+                                                decoration: BoxDecoration(
+                                                  borderRadius: BorderRadius.circular(19),
+                                                  gradient: LinearGradient(
+                                                    begin: Alignment.topCenter,
+                                                    end: Alignment.bottomCenter,
+                                                    stops: const [0.0, 0.36, 0.70, 1.0],
+                                                    colors: [
+                                                      Colors.black.withOpacity(0.02),
+                                                      Colors.black.withOpacity(0.10),
+                                                      Colors.black.withOpacity(0.62),
+                                                      Colors.black.withOpacity(0.96),
+                                                    ],
+                                                  ),
+                                                ),
+                                              ),
+                                            ),
+                                          ),
+
+                                          // Vien mau theo the loai: chi 2 goc cheo (trai-tren
+                                          // + phai-duoi), dang "bracket" giong mau ban gui,
+                                          // thay vi vien full bao quanh 4 canh.
+                                          Positioned(
+                                            top: 10,
+                                            left: 10,
+                                            child: IgnorePointer(
                                               child: _CornerAccent(
                                                 color: categoryColor.withOpacity(isHot ? 1.0 : 0.95),
                                                 glow: categoryColor.withOpacity(0.55),
@@ -4292,246 +4284,185 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
                                               ),
                                             ),
                                           ),
-                                        ),
+                                          Positioned(
+                                            bottom: 10,
+                                            right: 10,
+                                            child: IgnorePointer(
+                                              child: RotatedBox(
+                                                quarterTurns: 2,
+                                                child: _CornerAccent(
+                                                  color: categoryColor.withOpacity(isHot ? 1.0 : 0.95),
+                                                  glow: categoryColor.withOpacity(0.55),
+                                                  armLength: isHot ? 30 : 26,
+                                                  thickness: isHot ? 3 : 2.6,
+                                                ),
+                                              ),
+                                            ),
+                                          ),
 
-                                        // Hang tren cung: chip the loai (trai) + khoang cach (phai)
-                                        Positioned(
-                                          top: 14,
-                                          left: 14,
-                                          right: 14,
-                                          child: Row(
-                                            crossAxisAlignment: CrossAxisAlignment.start,
-                                            children: [
-                                              Expanded(
-                                                child: Wrap(
-                                                  spacing: 6,
-                                                  runSpacing: 6,
-                                                  children: [
-                                                    ...(categories.split(',')
-                                                        .map((e) => e.trim())
-                                                        .where((e) => e.isNotEmpty)
-                                                        .toList()
-                                                      ..sort((a, b) {
-                                                        final pa = _categoryTagPriority(a);
-                                                        final pb = _categoryTagPriority(b);
-                                                        if (pa != pb) return pa.compareTo(pb);
-                                                        return a.toLowerCase().compareTo(b.toLowerCase());
-                                                      }))
-                                                        .asMap()
-                                                        .entries
-                                                        .map((entry) {
-                                                      final bool isPrimary = entry.key == 0;
-                                                      final String label = entry.value;
-                                                      final Color chipColor = _getCategoryColor(label);
-                                                      return Container(
-                                                        padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 6),
-                                                        decoration: BoxDecoration(
-                                                          color: isPrimary ? chipColor : Colors.black.withOpacity(0.5),
-                                                          borderRadius: BorderRadius.circular(100),
-                                                          border: isPrimary
-                                                              ? null
-                                                              : Border.all(color: Colors.white.withOpacity(0.3)),
-                                                        ),
-                                                        child: Text(
-                                                          label,
-                                                          style: TextStyle(
-                                                            fontSize: 10.5,
-                                                            fontWeight: FontWeight.w700,
-                                                            letterSpacing: 0.2,
-                                                            color: Colors.white,
-                                                            shadows: const [
-                                                              Shadow(
-                                                                color: Colors.black45,
-                                                                blurRadius: 2,
-                                                                offset: Offset(0, 0.5),
+                                          // Hang tren cung: chip the loai (trai) + khoang cach (phai)
+                                          Positioned(
+                                            top: 14,
+                                            left: 14,
+                                            right: 14,
+                                            child: Row(
+                                              crossAxisAlignment: CrossAxisAlignment.start,
+                                              children: [
+                                                Expanded(
+                                                  child: Wrap(
+                                                    spacing: 6,
+                                                    runSpacing: 6,
+                                                    children: [
+                                                      ...(categories.split(',')
+                                                          .map((e) => e.trim())
+                                                          .where((e) => e.isNotEmpty)
+                                                          .toList()
+                                                        ..sort((a, b) {
+                                                          final pa = _categoryTagPriority(a);
+                                                          final pb = _categoryTagPriority(b);
+                                                          if (pa != pb) return pa.compareTo(pb);
+                                                          return a.toLowerCase().compareTo(b.toLowerCase());
+                                                        }))
+                                                          .asMap()
+                                                          .entries
+                                                          .map((entry) {
+                                                        final bool isPrimary = entry.key == 0;
+                                                        final String label = entry.value;
+                                                        final Color chipColor = _getCategoryColor(label);
+                                                        return Container(
+                                                          padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 6),
+                                                          decoration: BoxDecoration(
+                                                            color: isPrimary ? chipColor : Colors.black.withOpacity(0.5),
+                                                            borderRadius: BorderRadius.circular(100),
+                                                            border: isPrimary
+                                                                ? null
+                                                                : Border.all(color: Colors.white.withOpacity(0.3)),
+                                                          ),
+                                                          child: Text(
+                                                            label,
+                                                            style: TextStyle(
+                                                              fontSize: 10.5,
+                                                              fontWeight: FontWeight.w700,
+                                                              letterSpacing: 0.2,
+                                                              color: Colors.white,
+                                                              shadows: const [
+                                                                Shadow(
+                                                                  color: Colors.black45,
+                                                                  blurRadius: 2,
+                                                                  offset: Offset(0, 0.5),
+                                                                ),
+                                                              ],
+                                                            ),
+                                                          ),
+                                                        );
+                                                      }),
+                                                      if (isLive)
+                                                        Container(
+                                                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                                          decoration: BoxDecoration(
+                                                            gradient: const LinearGradient(
+                                                              colors: [Color(0xFFFF3B30), Color(0xFFFF7043)],
+                                                            ),
+                                                            borderRadius: BorderRadius.circular(100),
+                                                            boxShadow: [
+                                                              BoxShadow(
+                                                                color: const Color(0xFFFF3B30).withOpacity(0.5),
+                                                                blurRadius: 8,
+                                                                spreadRadius: 1,
+                                                              ),
+                                                            ],
+                                                          ),
+                                                          child: const Row(
+                                                            mainAxisSize: MainAxisSize.min,
+                                                            children: [
+                                                              _PulsingDot(),
+                                                              SizedBox(width: 5),
+                                                              Text(
+                                                                "LIVE",
+                                                                style: TextStyle(
+                                                                  fontSize: 10,
+                                                                  color: Colors.white,
+                                                                  fontWeight: FontWeight.w800,
+                                                                  letterSpacing: 0.5,
+                                                                ),
                                                               ),
                                                             ],
                                                           ),
                                                         ),
-                                                      );
-                                                    }),
-                                                    if (isLive)
-                                                      Container(
-                                                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                                                        decoration: BoxDecoration(
-                                                          gradient: const LinearGradient(
-                                                            colors: [Color(0xFFFF3B30), Color(0xFFFF7043)],
+                                                      if (isNew)
+                                                        Container(
+                                                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                                          decoration: BoxDecoration(
+                                                            color: const Color(0xFF2E7D32),
+                                                            borderRadius: BorderRadius.circular(100),
                                                           ),
-                                                          borderRadius: BorderRadius.circular(100),
-                                                          boxShadow: [
-                                                            BoxShadow(
-                                                              color: const Color(0xFFFF3B30).withOpacity(0.5),
-                                                              blurRadius: 8,
-                                                              spreadRadius: 1,
-                                                            ),
-                                                          ],
-                                                        ),
-                                                        child: const Row(
-                                                          mainAxisSize: MainAxisSize.min,
-                                                          children: [
-                                                            _PulsingDot(),
-                                                            SizedBox(width: 5),
-                                                            Text(
-                                                              "LIVE",
-                                                              style: TextStyle(
-                                                                fontSize: 10,
-                                                                color: Colors.white,
-                                                                fontWeight: FontWeight.w800,
-                                                                letterSpacing: 0.5,
-                                                              ),
-                                                            ),
-                                                          ],
-                                                        ),
-                                                      ),
-                                                    if (isNew)
-                                                      Container(
-                                                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                                                        decoration: BoxDecoration(
-                                                          color: const Color(0xFF2E7D32),
-                                                          borderRadius: BorderRadius.circular(100),
-                                                        ),
-                                                        child: const Text(
-                                                          "\u{1F195} M\u1EDAI",
-                                                          style: TextStyle(fontSize: 10, color: Colors.white, fontWeight: FontWeight.w700),
-                                                        ),
-                                                      ),
-                                                    if (isHot)
-                                                      Container(
-                                                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                                                        decoration: BoxDecoration(
-                                                          gradient: const LinearGradient(
-                                                            colors: [Color(0xFFFF7043), Color(0xFFE53935)],
+                                                          child: const Text(
+                                                            "\u{1F195} M\u1EDAI",
+                                                            style: TextStyle(fontSize: 10, color: Colors.white, fontWeight: FontWeight.w700),
                                                           ),
-                                                          borderRadius: BorderRadius.circular(100),
                                                         ),
-                                                        child: const Text(
-                                                          "\u{1F525} HOT",
-                                                          style: TextStyle(fontSize: 10, color: Colors.white, fontWeight: FontWeight.w700),
+                                                      if (isHot)
+                                                        Container(
+                                                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                                          decoration: BoxDecoration(
+                                                            gradient: const LinearGradient(
+                                                              colors: [Color(0xFFFF7043), Color(0xFFE53935)],
+                                                            ),
+                                                            borderRadius: BorderRadius.circular(100),
+                                                          ),
+                                                          child: const Text(
+                                                            "\u{1F525} HOT",
+                                                            style: TextStyle(fontSize: 10, color: Colors.white, fontWeight: FontWeight.w700),
+                                                          ),
                                                         ),
-                                                      ),
-                                                  ],
-                                                ),
-                                              ),
-                                              const SizedBox(width: 8),
-                                              if (distance.toString().isNotEmpty)
-                                                Container(
-                                                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                                                  decoration: BoxDecoration(
-                                                    color: Colors.black.withOpacity(0.6),
-                                                    borderRadius: BorderRadius.circular(100),
-                                                    border: Border.all(color: Colors.white.withOpacity(0.25)),
-                                                  ),
-                                                  child: Text(
-                                                    distance.toString(),
-                                                    style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Colors.white),
-                                                  ),
-                                                ),
-                                            ],
-                                          ),
-                                        ),
-
-                                        // Cot nut hanh dong noi ben phai (chat / bao cao / chia se)
-                                        Positioned(
-                                          right: 12,
-                                          bottom: 108,
-                                          child: Column(
-                                            children: [
-                                              GestureDetector(
-                                                onTap: () async {
-                                                  String avatarUrl = creatorAvatars[creatorId] ?? '';
-                                                  if (avatarUrl.isEmpty) {
-                                                    try {
-                                                      final res = await http.get(Uri.parse(
-                                                          "${AppConfig.webDomain}/wp-json/profile/v1/user/$creatorId"));
-                                                      if (res.statusCode == 200) {
-                                                        final data = jsonDecode(res.body);
-                                                        avatarUrl = data['avatar_url'] ?? '';
-                                                      }
-                                                    } catch (e) {
-                                                      debugPrint("Loi fetch avatar: $e");
-                                                    }
-                                                  }
-                                                  _openChat(
-                                                    creatorId,
-                                                    creatorNames[creatorId] ?? 'Nguoi dung',
-                                                    avatarUrl: avatarUrl,
-                                                  );
-                                                },
-                                                child: Container(
-                                                  width: 32,
-                                                  height: 32,
-                                                  decoration: BoxDecoration(
-                                                    gradient: LinearGradient(
-                                                      colors: categoryGradient,
-                                                      begin: Alignment.topLeft,
-                                                      end: Alignment.bottomRight,
-                                                    ),
-                                                    shape: BoxShape.circle,
-                                                    boxShadow: [
-                                                      BoxShadow(
-                                                        color: categoryColor.withOpacity(0.5),
-                                                        blurRadius: 8,
-                                                        offset: const Offset(0, 4),
-                                                      ),
                                                     ],
                                                   ),
-                                                  child: const Icon(Icons.chat_bubble, color: Colors.white, size: 14),
                                                 ),
-                                              ),
-                                              const SizedBox(height: 10),
-                                              if (myUserId != int.tryParse(creatorId))
-                                                Tooltip(
-                                                  message: "Bao cao / Chan",
-                                                  child: GestureDetector(
-                                                    onTap: () {
-                                                      final id = product["id"];
-                                                      final int pid = id != null ? int.tryParse(id.toString()) ?? 0 : 0;
-                                                      if (pid == 0) return;
-                                                      _showReportBlockSheet(
-                                                        productId: pid,
-                                                        creatorId: int.tryParse(creatorId) ?? 0,
-                                                        creatorName: creatorName,
-                                                      );
-                                                    },
-                                                    child: Container(
-                                                      width: 32,
-                                                      height: 32,
-                                                      decoration: BoxDecoration(
-                                                        color: Colors.black38,
-                                                        shape: BoxShape.circle,
-                                                        border: Border.all(color: Colors.white24),
-                                                      ),
-                                                      child: const Icon(Icons.more_horiz, color: Colors.white70, size: 16),
+                                                const SizedBox(width: 8),
+                                                if (distance.toString().isNotEmpty)
+                                                  Container(
+                                                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                                                    decoration: BoxDecoration(
+                                                      color: Colors.black.withOpacity(0.6),
+                                                      borderRadius: BorderRadius.circular(100),
+                                                      border: Border.all(color: Colors.white.withOpacity(0.25)),
+                                                    ),
+                                                    child: Text(
+                                                      distance.toString(),
+                                                      style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Colors.white),
                                                     ),
                                                   ),
-                                                )
-                                              else
-                                                Tooltip(
-                                                  message: "Xoa keo nay",
-                                                  child: GestureDetector(
-                                                    onTap: () {
-                                                      final id = product["id"];
-                                                      final int pid = id != null ? int.tryParse(id.toString()) ?? 0 : 0;
-                                                      if (pid == 0) return;
-                                                      _confirmDelete(context, pid);
-                                                    },
-                                                    child: Container(
-                                                      width: 32,
-                                                      height: 32,
-                                                      decoration: BoxDecoration(
-                                                        color: Colors.black38,
-                                                        shape: BoxShape.circle,
-                                                        border: Border.all(color: Colors.white24),
-                                                      ),
-                                                      child: const Icon(Icons.delete, color: Colors.redAccent, size: 16),
-                                                    ),
-                                                  ),
-                                                ),
-                                              const SizedBox(height: 10),
-                                              Tooltip(
-                                                message: "Chia se keo nay",
-                                                child: GestureDetector(
-                                                  onTap: () => _shareKeo(product),
+                                              ],
+                                            ),
+                                          ),
+
+                                          // Cot nut hanh dong noi ben phai (chat / bao cao / chia se)
+                                          Positioned(
+                                            right: 12,
+                                            bottom: 108,
+                                            child: Column(
+                                              children: [
+                                                GestureDetector(
+                                                  onTap: () async {
+                                                    String avatarUrl = creatorAvatars[creatorId] ?? '';
+                                                    if (avatarUrl.isEmpty) {
+                                                      try {
+                                                        final res = await http.get(Uri.parse(
+                                                            "${AppConfig.webDomain}/wp-json/profile/v1/user/$creatorId"));
+                                                        if (res.statusCode == 200) {
+                                                          final data = jsonDecode(res.body);
+                                                          avatarUrl = data['avatar_url'] ?? '';
+                                                        }
+                                                      } catch (e) {
+                                                        debugPrint("Loi fetch avatar: $e");
+                                                      }
+                                                    }
+                                                    _openChat(
+                                                      creatorId,
+                                                      creatorNames[creatorId] ?? 'Nguoi dung',
+                                                      avatarUrl: avatarUrl,
+                                                    );
+                                                  },
                                                   child: Container(
                                                     width: 32,
                                                     height: 32,
@@ -4544,172 +4475,248 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
                                                       shape: BoxShape.circle,
                                                       boxShadow: [
                                                         BoxShadow(
-                                                          color: categoryColor.withOpacity(0.4),
-                                                          blurRadius: 6,
-                                                          offset: const Offset(0, 3),
+                                                          color: categoryColor.withOpacity(0.5),
+                                                          blurRadius: 8,
+                                                          offset: const Offset(0, 4),
                                                         ),
                                                       ],
                                                     ),
-                                                    child: const Icon(Icons.share, color: Colors.white, size: 14),
-                                                  ),
-                                                ),
-                                              ),
-                                            ],
-                                          ),
-                                        ),
-
-                                        // Noi dung day the: tieu de, host, gio/gia, so slot con lai
-                                        Positioned(
-                                          left: 0,
-                                          right: 0,
-                                          bottom: 0,
-                                          child: Padding(
-                                            padding: const EdgeInsets.fromLTRB(18, 0, 66, 16),
-                                            child: Column(
-                                              crossAxisAlignment: CrossAxisAlignment.start,
-                                              mainAxisSize: MainAxisSize.min,
-                                              children: [
-                                                Text(
-                                                  product["name"].toString(),
-                                                  maxLines: 2,
-                                                  overflow: TextOverflow.ellipsis,
-                                                  style: const TextStyle(
-                                                    fontSize: 17,
-                                                    fontWeight: FontWeight.bold,
-                                                    color: Colors.white,
-                                                    height: 1.2,
-                                                    shadows: [Shadow(blurRadius: 16, color: Colors.black87)],
-                                                  ),
-                                                ),
-                                                const SizedBox(height: 6),
-                                                GestureDetector(
-                                                  onTap: () {
-                                                    Navigator.push(
-                                                      context,
-                                                      MaterialPageRoute(
-                                                        builder: (context) => UserInfoPage(
-                                                          userId: myUserId,
-                                                          username: creatorName,
-                                                          targetUserId: int.parse(creatorId),
-                                                          avatarUrl: creatorAvatars[creatorId],
-                                                        ),
-                                                      ),
-                                                    );
-                                                  },
-                                                  child: Row(
-                                                    mainAxisSize: MainAxisSize.min,
-                                                    children: [
-                                                      buildParticipantStack(creatorId, product['participants'] ?? []),
-                                                      const SizedBox(width: 6),
-                                                      Flexible(
-                                                        child: Wrap(
-                                                          spacing: 4,
-                                                          runSpacing: 2,
-                                                          crossAxisAlignment: WrapCrossAlignment.center,
-                                                          children: [
-                                                            Text(
-                                                              creatorName,
-                                                              style: const TextStyle(fontSize: 12, color: Colors.white, fontWeight: FontWeight.w700),
-                                                            ),
-                                                            _statChip("\u2B50 ${userStats?['attendance_percent'] ?? 0}%", categoryColor),
-                                                            _statChip("\u{1F9FE} ${userStats?['total_keo'] ?? 0}", categoryColor),
-                                                            _statChip("\u{1F3AF} ${userStats?['real_join_percent'] ?? 0}%", categoryColor),
-                                                          ],
-                                                        ),
-                                                      ),
-                                                    ],
+                                                    child: const Icon(Icons.chat_bubble, color: Colors.white, size: 14),
                                                   ),
                                                 ),
                                                 const SizedBox(height: 10),
-                                                Row(
-                                                  crossAxisAlignment: CrossAxisAlignment.end,
-                                                  children: [
-                                                    Expanded(
-                                                      child: Column(
-                                                        crossAxisAlignment: CrossAxisAlignment.start,
-                                                        mainAxisSize: MainAxisSize.min,
-                                                        children: [
-                                                          Row(
-                                                            children: [
-                                                              Icon(Icons.access_time, size: 12, color: categoryColor),
-                                                              const SizedBox(width: 4),
-                                                              Expanded(
-                                                                child: Text(
-                                                                  time,
-                                                                  maxLines: 1,
-                                                                  overflow: TextOverflow.ellipsis,
-                                                                  style: const TextStyle(fontSize: 11.5, color: Colors.white70, fontWeight: FontWeight.w500),
-                                                                ),
-                                                              ),
-                                                            ],
-                                                          ),
-                                                          const SizedBox(height: 3),
-                                                          Text(
-                                                            priceText,
-                                                            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Colors.white),
-                                                          ),
-                                                          if (time.isNotEmpty || isSoon)
-                                                            Padding(
-                                                              padding: const EdgeInsets.only(top: 4),
-                                                              child: Row(
-                                                                mainAxisSize: MainAxisSize.min,
-                                                                children: [
-                                                                  if (time.isNotEmpty) CountdownTimerText(timeString: time),
-                                                                  if (time.isNotEmpty && isSoon) const SizedBox(width: 6),
-                                                                  if (isSoon)
-                                                                    Container(
-                                                                      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
-                                                                      decoration: BoxDecoration(
-                                                                        gradient: const LinearGradient(
-                                                                          colors: [Color(0xFFFFA726), Color(0xFFFF5722)],
-                                                                        ),
-                                                                        borderRadius: BorderRadius.circular(12),
-                                                                      ),
-                                                                      child: const Text(
-                                                                        "\u26A1 S\u1EAEP DI\u1EC4N RA",
-                                                                        style: TextStyle(fontSize: 9.5, color: Colors.white, fontWeight: FontWeight.w700),
-                                                                      ),
-                                                                    ),
-                                                                ],
-                                                              ),
-                                                            ),
-                                                        ],
+                                                if (myUserId != int.tryParse(creatorId))
+                                                  Tooltip(
+                                                    message: "Bao cao / Chan",
+                                                    child: GestureDetector(
+                                                      onTap: () {
+                                                        final id = product["id"];
+                                                        final int pid = id != null ? int.tryParse(id.toString()) ?? 0 : 0;
+                                                        if (pid == 0) return;
+                                                        _showReportBlockSheet(
+                                                          productId: pid,
+                                                          creatorId: int.tryParse(creatorId) ?? 0,
+                                                          creatorName: creatorName,
+                                                        );
+                                                      },
+                                                      child: Container(
+                                                        width: 32,
+                                                        height: 32,
+                                                        decoration: BoxDecoration(
+                                                          color: Colors.black38,
+                                                          shape: BoxShape.circle,
+                                                          border: Border.all(color: Colors.white24),
+                                                        ),
+                                                        child: const Icon(Icons.more_horiz, color: Colors.white70, size: 16),
                                                       ),
                                                     ),
-                                                    const SizedBox(width: 8),
-                                                    Builder(builder: (context) {
-                                                      final int maxPeopleSlot = int.tryParse(product['meta']['slots']?.toString() ?? '0') ?? 0;
-                                                      final int joinedNow = inviteStatusMap[productId]?.joinedCount ??
-                                                          int.tryParse(product['joined_count']?.toString() ?? '0') ?? 0;
-                                                      final int remaining = maxPeopleSlot - joinedNow;
-                                                      if (maxPeopleSlot <= 0) return const SizedBox.shrink();
-                                                      final bool urgent = remaining <= 2;
-                                                      return Container(
-                                                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+                                                  )
+                                                else
+                                                  Tooltip(
+                                                    message: "Xoa keo nay",
+                                                    child: GestureDetector(
+                                                      onTap: () {
+                                                        final id = product["id"];
+                                                        final int pid = id != null ? int.tryParse(id.toString()) ?? 0 : 0;
+                                                        if (pid == 0) return;
+                                                        _confirmDelete(context, pid);
+                                                      },
+                                                      child: Container(
+                                                        width: 32,
+                                                        height: 32,
                                                         decoration: BoxDecoration(
-                                                          color: urgent ? const Color(0x38FF5A5A) : categoryColor.withOpacity(0.18),
-                                                          borderRadius: BorderRadius.circular(100),
-                                                          border: Border.all(
-                                                            color: urgent ? const Color(0x80FF7870) : categoryColor,
-                                                          ),
+                                                          color: Colors.black38,
+                                                          shape: BoxShape.circle,
+                                                          border: Border.all(color: Colors.white24),
                                                         ),
-                                                        child: Text(
-                                                          urgent ? "\u{1F525} C\u00F2n $remaining slot" : "C\u00F2n $remaining slots",
-                                                          style: TextStyle(
-                                                            fontSize: 11,
-                                                            fontWeight: FontWeight.w700,
-                                                            color: urgent ? const Color(0xFFFF9D8F) : categoryColor,
-                                                          ),
+                                                        child: const Icon(Icons.delete, color: Colors.redAccent, size: 16),
+                                                      ),
+                                                    ),
+                                                  ),
+                                                const SizedBox(height: 10),
+                                                Tooltip(
+                                                  message: "Chia se keo nay",
+                                                  child: GestureDetector(
+                                                    onTap: () => _shareKeo(product),
+                                                    child: Container(
+                                                      width: 32,
+                                                      height: 32,
+                                                      decoration: BoxDecoration(
+                                                        gradient: LinearGradient(
+                                                          colors: categoryGradient,
+                                                          begin: Alignment.topLeft,
+                                                          end: Alignment.bottomRight,
                                                         ),
-                                                      );
-                                                    }),
-                                                  ],
+                                                        shape: BoxShape.circle,
+                                                        boxShadow: [
+                                                          BoxShadow(
+                                                            color: categoryColor.withOpacity(0.4),
+                                                            blurRadius: 6,
+                                                            offset: const Offset(0, 3),
+                                                          ),
+                                                        ],
+                                                      ),
+                                                      child: const Icon(Icons.share, color: Colors.white, size: 14),
+                                                    ),
+                                                  ),
                                                 ),
                                               ],
                                             ),
                                           ),
-                                        ),
-                                      ],
+
+                                          // Noi dung day the: tieu de, host, gio/gia, so slot con lai
+                                          Positioned(
+                                            left: 0,
+                                            right: 0,
+                                            bottom: 0,
+                                            child: Padding(
+                                              padding: const EdgeInsets.fromLTRB(18, 0, 66, 16),
+                                              child: Column(
+                                                crossAxisAlignment: CrossAxisAlignment.start,
+                                                mainAxisSize: MainAxisSize.min,
+                                                children: [
+                                                  Text(
+                                                    product["name"].toString(),
+                                                    maxLines: 2,
+                                                    overflow: TextOverflow.ellipsis,
+                                                    style: const TextStyle(
+                                                      fontSize: 17,
+                                                      fontWeight: FontWeight.bold,
+                                                      color: Colors.white,
+                                                      height: 1.2,
+                                                      shadows: [Shadow(blurRadius: 16, color: Colors.black87)],
+                                                    ),
+                                                  ),
+                                                  const SizedBox(height: 6),
+                                                  GestureDetector(
+                                                    onTap: () {
+                                                      Navigator.push(
+                                                        context,
+                                                        MaterialPageRoute(
+                                                          builder: (context) => UserInfoPage(
+                                                            userId: myUserId,
+                                                            username: creatorName,
+                                                            targetUserId: int.parse(creatorId),
+                                                            avatarUrl: creatorAvatars[creatorId],
+                                                          ),
+                                                        ),
+                                                      );
+                                                    },
+                                                    child: Row(
+                                                      mainAxisSize: MainAxisSize.min,
+                                                      children: [
+                                                        buildParticipantStack(creatorId, product['participants'] ?? []),
+                                                        const SizedBox(width: 6),
+                                                        Flexible(
+                                                          child: Wrap(
+                                                            spacing: 4,
+                                                            runSpacing: 2,
+                                                            crossAxisAlignment: WrapCrossAlignment.center,
+                                                            children: [
+                                                              Text(
+                                                                creatorName,
+                                                                style: const TextStyle(fontSize: 12, color: Colors.white, fontWeight: FontWeight.w700),
+                                                              ),
+                                                              _statChip("\u2B50 ${userStats?['attendance_percent'] ?? 0}%", categoryColor),
+                                                              _statChip("\u{1F9FE} ${userStats?['total_keo'] ?? 0}", categoryColor),
+                                                              _statChip("\u{1F3AF} ${userStats?['real_join_percent'] ?? 0}%", categoryColor),
+                                                            ],
+                                                          ),
+                                                        ),
+                                                      ],
+                                                    ),
+                                                  ),
+                                                  const SizedBox(height: 10),
+                                                  Row(
+                                                    crossAxisAlignment: CrossAxisAlignment.end,
+                                                    children: [
+                                                      Expanded(
+                                                        child: Column(
+                                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                                          mainAxisSize: MainAxisSize.min,
+                                                          children: [
+                                                            Row(
+                                                              children: [
+                                                                Icon(Icons.access_time, size: 12, color: categoryColor),
+                                                                const SizedBox(width: 4),
+                                                                Expanded(
+                                                                  child: Text(
+                                                                    time,
+                                                                    maxLines: 1,
+                                                                    overflow: TextOverflow.ellipsis,
+                                                                    style: const TextStyle(fontSize: 11.5, color: Colors.white70, fontWeight: FontWeight.w500),
+                                                                  ),
+                                                                ),
+                                                              ],
+                                                            ),
+                                                            const SizedBox(height: 3),
+                                                            Text(
+                                                              priceText,
+                                                              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: Colors.white),
+                                                            ),
+                                                            if (time.isNotEmpty || isSoon)
+                                                              Padding(
+                                                                padding: const EdgeInsets.only(top: 4),
+                                                                child: Row(
+                                                                  mainAxisSize: MainAxisSize.min,
+                                                                  children: [
+                                                                    if (time.isNotEmpty) CountdownTimerText(timeString: time),
+                                                                    if (time.isNotEmpty && isSoon) const SizedBox(width: 6),
+                                                                    if (isSoon)
+                                                                      Container(
+                                                                        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
+                                                                        decoration: BoxDecoration(
+                                                                          gradient: const LinearGradient(
+                                                                            colors: [Color(0xFFFFA726), Color(0xFFFF5722)],
+                                                                          ),
+                                                                          borderRadius: BorderRadius.circular(12),
+                                                                        ),
+                                                                        child: const Text(
+                                                                          "\u26A1 S\u1EAEP DI\u1EC4N RA",
+                                                                          style: TextStyle(fontSize: 9.5, color: Colors.white, fontWeight: FontWeight.w700),
+                                                                        ),
+                                                                      ),
+                                                                  ],
+                                                                ),
+                                                              ),
+                                                          ],
+                                                        ),
+                                                      ),
+                                                      const SizedBox(width: 8),
+                                                      Builder(builder: (context) {
+                                                        final int maxPeopleSlot = int.tryParse(product['meta']['slots']?.toString() ?? '0') ?? 0;
+                                                        final int joinedNow = inviteStatusMap[productId]?.joinedCount ??
+                                                            int.tryParse(product['joined_count']?.toString() ?? '0') ?? 0;
+                                                        final int remaining = maxPeopleSlot - joinedNow;
+                                                        if (maxPeopleSlot <= 0) return const SizedBox.shrink();
+                                                        final bool urgent = remaining <= 2;
+                                                        return Container(
+                                                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+                                                          decoration: BoxDecoration(
+                                                            color: urgent ? const Color(0x38FF5A5A) : categoryColor.withOpacity(0.18),
+                                                            borderRadius: BorderRadius.circular(100),
+                                                            border: Border.all(
+                                                              color: urgent ? const Color(0x80FF7870) : categoryColor,
+                                                            ),
+                                                          ),
+                                                          child: Text(
+                                                            urgent ? "\u{1F525} C\u00F2n $remaining slot" : "C\u00F2n $remaining slots",
+                                                            style: TextStyle(
+                                                              fontSize: 11,
+                                                              fontWeight: FontWeight.w700,
+                                                              color: urgent ? const Color(0xFFFF9D8F) : categoryColor,
+                                                            ),
+                                                          ),
+                                                        );
+                                                      }),
+                                                    ],
+                                                  ),
+                                                ],
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
                                     ),
                                   ),
                                 ),
@@ -5576,6 +5583,176 @@ class _StatusGlowCardState extends State<_StatusGlowCard>
       },
       child: widget.child,
     );
+  }
+}
+
+// 🏃 Vien "chay" sang quanh khung card - dung cho trang thai "dang dien ra".
+// Khac voi _StatusGlowCard (vien nhap nhay dong loat / tho phong-xep), o day
+// chi 1 doan sang ngan chay lien tuc doc theo chu vi bo-tron-goc cua card,
+// tao cam giac "dang live" ro hon la chi sang-toi deu.
+class _RunningBorderCard extends StatefulWidget {
+  final bool active;
+  final Color color;
+  final Color glow;
+  final Duration duration;
+  final double borderRadius;
+  final double strokeWidth;
+  final double segmentFraction; // 0..1, ty le doan sang / tong chu vi
+  final Widget child;
+
+  const _RunningBorderCard({
+    required this.active,
+    required this.color,
+    required this.glow,
+    required this.child,
+    this.duration = const Duration(milliseconds: 1800),
+    this.borderRadius = 24,
+    this.strokeWidth = 2.4,
+    this.segmentFraction = 0.30,
+  });
+
+  @override
+  State<_RunningBorderCard> createState() => _RunningBorderCardState();
+}
+
+class _RunningBorderCardState extends State<_RunningBorderCard>
+    with TickerProviderStateMixin {
+  late AnimationController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(vsync: this, duration: widget.duration);
+    if (widget.active) _controller.repeat();
+  }
+
+  @override
+  void didUpdateWidget(covariant _RunningBorderCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.duration != oldWidget.duration) {
+      _controller.dispose();
+      _controller = AnimationController(vsync: this, duration: widget.duration);
+      if (widget.active) _controller.repeat();
+      return;
+    }
+    if (widget.active && !oldWidget.active) {
+      _controller.repeat();
+    } else if (!widget.active && oldWidget.active) {
+      _controller.stop();
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!widget.active) return widget.child;
+
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (context, child) {
+        return CustomPaint(
+          foregroundPainter: _RunningBorderPainter(
+            progress: _controller.value,
+            color: widget.color,
+            glow: widget.glow,
+            radius: widget.borderRadius,
+            strokeWidth: widget.strokeWidth,
+            segmentFraction: widget.segmentFraction,
+          ),
+          child: child,
+        );
+      },
+      child: widget.child,
+    );
+  }
+}
+
+class _RunningBorderPainter extends CustomPainter {
+  final double progress; // 0..1, vi tri hien tai cua doan sang tren chu vi
+  final Color color;
+  final Color glow;
+  final double radius;
+  final double strokeWidth;
+  final double segmentFraction;
+
+  _RunningBorderPainter({
+    required this.progress,
+    required this.color,
+    required this.glow,
+    required this.radius,
+    required this.strokeWidth,
+    required this.segmentFraction,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final rrect = RRect.fromRectAndRadius(
+      Offset.zero & size,
+      Radius.circular(radius),
+    );
+    final path = Path()..addRRect(rrect);
+
+    // Vien mo lam nen, luon hien de thay ranh gioi card ngay ca luc doan
+    // sang dang o phia doi dien.
+    final basePaint = Paint()
+      ..color = color.withOpacity(0.22)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = strokeWidth * 0.7;
+    canvas.drawPath(path, basePaint);
+
+    final metrics = path.computeMetrics().toList();
+    if (metrics.isEmpty) return;
+    final metric = metrics.first;
+    final total = metric.length;
+    if (total <= 0) return;
+
+    final segLen = total * segmentFraction;
+    final start = total * progress;
+
+    void drawSegment(double from, double len) {
+      if (len <= 0) return;
+      final seg = metric.extractPath(from, from + len);
+
+      final glowPaint = Paint()
+        ..color = glow.withOpacity(0.55)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = strokeWidth + 3
+        ..strokeCap = StrokeCap.round
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4);
+
+      final linePaint = Paint()
+        ..color = color
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = strokeWidth
+        ..strokeCap = StrokeCap.round;
+
+      canvas.drawPath(seg, glowPaint);
+      canvas.drawPath(seg, linePaint);
+    }
+
+    // Doan sang co the "vat" qua diem dau chu vi (wrap-around) khi progress
+    // gan 1.0, nen tach lam 2 doan ve khi vuot qua tong chieu dai.
+    if (start + segLen <= total) {
+      drawSegment(start, segLen);
+    } else {
+      final firstLen = total - start;
+      drawSegment(start, firstLen);
+      drawSegment(0, segLen - firstLen);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _RunningBorderPainter oldDelegate) {
+    return oldDelegate.progress != progress ||
+        oldDelegate.color != color ||
+        oldDelegate.glow != glow ||
+        oldDelegate.strokeWidth != strokeWidth ||
+        oldDelegate.segmentFraction != segmentFraction;
   }
 }
 
