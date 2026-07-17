@@ -1456,7 +1456,7 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
         // 🚀 CHỈ lấy field cần dùng ở shop page thay vì cả schema WC
         // (description, attributes, variations, links...) → JSON nhẹ
         // hơn đáng kể, parse nhanh hơn, tốn ít băng thông hơn.
-            "&_fields=id,name,price,images,meta_data,categories,date_created,party_media_url,party_media_type"
+            "&_fields=id,name,price,images,meta_data,categories,date_created,party_media_image_url,party_media_video_url"
             "&consumer_key=ck_3809ad31dd47ca7d10573e35ccdf746494b305a9"
             "&consumer_secret=cs_a49b903ddc7972646359f360d79343cd1e33b6f8",
       );
@@ -2656,10 +2656,15 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
 
     // 🆕 Media "khoảnh khắc bàn nhậu" (ảnh/video) — lấy từ backend nếu đã
     // được lưu bền (custom REST field trên product), để còn sau khi reload.
-    // Nếu backend chưa trả field này thì mặc định rỗng, và card sẽ chỉ hiện
-    // lại khi có onMediaAdded cập nhật tức thì trong phiên hiện tại.
-    productMap['party_media_url'] = productMap['party_media_url']?.toString() ?? '';
-    productMap['party_media_type'] = productMap['party_media_type']?.toString() ?? '';
+    // 🔧 FIX: tách riêng ảnh mới nhất và video mới nhất (2 field độc lập),
+    // thay vì 1 field chung party_media_url/type trước đây — vì 1 field
+    // chung khiến upload ảnh sau sẽ "đè" mất video trước đó (và ngược lại)
+    // khi hiển thị trên card. Nếu backend chưa trả field thì mặc định rỗng,
+    // card sẽ chỉ hiện lại khi có onMediaAdded cập nhật tức thì trong phiên.
+    productMap['party_media_image_url'] =
+        productMap['party_media_image_url']?.toString() ?? '';
+    productMap['party_media_video_url'] =
+        productMap['party_media_video_url']?.toString() ?? '';
 
     // Categories
     if (productMap['categories'] != null && productMap['categories'] is List) {
@@ -3472,10 +3477,13 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
     // tiên hiện đầu tiên, giống cách video party được ưu tiên ở
     // _buildMediaCollage(). Trước đây urls chỉ lấy product["images"] gốc
     // nên ảnh upload từ detail page không bao giờ lên card.
+    // 🔧 FIX: dùng field ảnh riêng (party_media_image_url) thay vì field
+    // chung party_media_url/type — trước đây nếu video được upload SAU
+    // ảnh, party_media_type đổi thành 'video' khiến ảnh "biến mất" dù ảnh
+    // vẫn còn tồn tại (và ngược lại).
     final String? partyImageUrl =
-    (product['party_media_type'] == 'image' &&
-        (product['party_media_url'] as String?)?.isNotEmpty == true)
-        ? product['party_media_url'] as String
+    (product['party_media_image_url'] as String?)?.isNotEmpty == true
+        ? product['party_media_image_url'] as String
         : null;
 
     final List<String> urls = [
@@ -4117,12 +4125,16 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
                             // 🆕 Ưu tiên video "khoảnh khắc bàn nhậu" vừa được participant
                             // upload (nếu có) trước khi fallback về video chính thức của
                             // sản phẩm lấy từ meta_data — xem onMediaAdded ở trên, và field
-                            // party_media_url/party_media_type nếu được backend trả kèm sẵn
-                            // trong response list sản phẩm (persist qua lần load sau).
+                            // party_media_video_url nếu được backend trả kèm sẵn trong
+                            // response list sản phẩm (persist qua lần load sau).
+                            // 🔧 FIX: dùng field video riêng (party_media_video_url) thay vì
+                            // field chung party_media_url/type — trước đây nếu ảnh được
+                            // upload SAU video, party_media_type đổi thành 'image' khiến
+                            // video "biến mất" khỏi card dù video vẫn còn tồn tại.
                             String? cardVideoUrl;
-                            if (product['party_media_type'] == 'video' &&
-                                (product['party_media_url'] as String?)?.isNotEmpty == true) {
-                              cardVideoUrl = product['party_media_url'] as String;
+                            if ((product['party_media_video_url'] as String?)?.isNotEmpty ==
+                                true) {
+                              cardVideoUrl = product['party_media_video_url'] as String;
                             }
 
                             // Lay video dau tien (neu co) tu meta_data, giong
@@ -4220,10 +4232,18 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
                                       // bên trong trang chi tiết -> lưu thẳng vào Map `product`
                                       // (cùng reference với item trong `products`) rồi setState
                                       // để card ngoài list rebuild ngay, không cần fetch lại API.
+                                      // 🔧 FIX: chỉ update field TƯƠNG ỨNG với type vừa upload
+                                      // (image -> party_media_image_url, video ->
+                                      // party_media_video_url), không còn ghi đè lên 1 field
+                                      // chung nữa -> upload ảnh không còn làm "biến mất" video
+                                      // đã có trước đó trên card (và ngược lại).
                                       onMediaAdded: (url, type) {
                                         setState(() {
-                                          product['party_media_url'] = url;
-                                          product['party_media_type'] = type;
+                                          if (type == 'video') {
+                                            product['party_media_video_url'] = url;
+                                          } else {
+                                            product['party_media_image_url'] = url;
+                                          }
                                         });
                                       },
                                     ),
@@ -5444,15 +5464,21 @@ class _CardVideoPreviewState extends State<_CardVideoPreview> {
       );
     }
     if (!_ready || _controller == null) {
-      return Container(
-        color: const Color(0xFF2A2340),
-        child: const Center(
-          child: SizedBox(
-            width: 22,
-            height: 22,
-            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white54),
-          ),
+      return shimmer.Shimmer(
+        period: const Duration(milliseconds: 2500), // càng chậm càng đỡ để ý
+        gradient: LinearGradient(
+          colors: [
+            const Color(0xFF0A0A12), // gần đen, ngả xanh rất nhẹ cho hợp tone
+            const Color(0xFF0A0A12),
+            const Color(0xFF2A2A38).withOpacity(.35), // sáng hơn nền chút, vẫn trung tính
+            const Color(0xFF0A0A12),
+            const Color(0xFF0A0A12),
+          ],
+          stops: const [0.0, 0.3, 0.5, 0.7, 1.0], // dải rất mượt, không có cạnh rõ
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
         ),
+        child: Container(color: const Color(0xFF0A0A12)),
       );
     }
     return Stack(

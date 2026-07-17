@@ -6,8 +6,9 @@ import 'login_page.dart';
 import '../helpers/storage_helper.dart';
 import 'edit_profile_page.dart';
 import 'package:shimmer/shimmer.dart' as shimmer;
-import 'package:url_launcher/url_launcher.dart';
 import '../config/app_config.dart';
+import 'privacy_policy_page.dart';
+import 'terms_of_service_page.dart';
 
 
 class ProfilePage extends StatefulWidget {
@@ -131,6 +132,155 @@ class _AvatarWidgetState extends State<AvatarWidget> {
 }
 
 // -----------------------------
+// 🔹 Popup xác nhận kiểu "glass" — đồng bộ tone gradient navy/cam của app
+// -----------------------------
+class _GlassAlertDialog extends StatelessWidget {
+  final IconData icon;
+  final Color iconColor;
+  final String title;
+  final String? content;
+  final Widget? inputField;
+  final String cancelLabel;
+  final String confirmLabel;
+  final List<Color> confirmColors;
+  final Color confirmTextColor;
+  final VoidCallback onCancel;
+  final VoidCallback onConfirm;
+
+  const _GlassAlertDialog({
+    required this.icon,
+    required this.iconColor,
+    required this.title,
+    this.content,
+    this.inputField,
+    required this.cancelLabel,
+    required this.confirmLabel,
+    required this.confirmColors,
+    this.confirmTextColor = Colors.white,
+    required this.onCancel,
+    required this.onConfirm,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      backgroundColor: Colors.transparent,
+      insetPadding: const EdgeInsets.symmetric(horizontal: 28),
+      child: Container(
+        padding: const EdgeInsets.fromLTRB(22, 26, 22, 18),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(24),
+          gradient: LinearGradient(
+            colors: [
+              const Color(0xFF1E3A8A),
+              const Color(0xFFFF7F50),
+            ],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+          border: Border.all(color: Colors.white.withOpacity(0.18)),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.35),
+              blurRadius: 24,
+              offset: const Offset(0, 12),
+            ),
+          ],
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 52,
+              height: 52,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: iconColor.withOpacity(0.15),
+                border: Border.all(color: iconColor.withOpacity(0.4)),
+              ),
+              child: Icon(icon, color: iconColor, size: 26),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              title,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 17,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            if (content != null) ...[
+              const SizedBox(height: 10),
+              Text(
+                content!,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: Colors.white.withOpacity(0.75),
+                  fontSize: 13.5,
+                  height: 1.55,
+                ),
+              ),
+            ],
+            if (inputField != null) ...[
+              const SizedBox(height: 16),
+              inputField!,
+            ],
+            const SizedBox(height: 22),
+            Row(
+              children: [
+                Expanded(
+                  child: TextButton(
+                    onPressed: onCancel,
+                    style: TextButton.styleFrom(
+                      foregroundColor: Colors.white70,
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(14),
+                        side: BorderSide(color: Colors.white.withOpacity(0.2)),
+                      ),
+                    ),
+                    child: Text(cancelLabel),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Container(
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(14),
+                      gradient: LinearGradient(
+                        colors: confirmColors,
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                      ),
+                    ),
+                    child: TextButton(
+                      onPressed: onConfirm,
+                      style: TextButton.styleFrom(
+                        foregroundColor: confirmTextColor,
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                      ),
+                      child: Text(
+                        confirmLabel,
+                        style: TextStyle(
+                          fontWeight: FontWeight.w600,
+                          color: confirmTextColor,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// -----------------------------
 class _ProfilePageState extends State<ProfilePage> {
   Map<String, dynamic>? _userData;
   bool _loading = true;
@@ -212,16 +362,6 @@ class _ProfilePageState extends State<ProfilePage> {
     );
   }
 
-  Future<void> _openUrl(String url) async {
-    final uri = Uri.parse(url);
-    if (await canLaunchUrl(uri)) {
-      await launchUrl(uri, mode: LaunchMode.externalApplication);
-    } else if (mounted) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text("Không thể mở liên kết")));
-    }
-  }
-
   /// 🆕 Xóa tài khoản — yêu cầu bắt buộc của App Store/Play Store
   /// (Apple Guideline 5.1.1(v), Google Play Data Safety): app có tài
   /// khoản phải cho user tự xóa tài khoản ngay trong app, không được
@@ -230,22 +370,18 @@ class _ProfilePageState extends State<ProfilePage> {
     // Bước 1: cảnh báo rõ ràng đây là hành động không thể hoàn tác.
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text("Xóa tài khoản vĩnh viễn?"),
-        content: const Text(
-          "Toàn bộ dữ liệu tài khoản, kèo, tin nhắn liên kết sẽ bị xóa và "
-              "KHÔNG THỂ khôi phục. Bạn có chắc chắn muốn tiếp tục?",
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text("Hủy"),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, true),
-            child: const Text("Xóa vĩnh viễn", style: TextStyle(color: Colors.red)),
-          ),
-        ],
+      builder: (ctx) => _GlassAlertDialog(
+        icon: Icons.warning_amber_rounded,
+        iconColor: Colors.redAccent,
+        title: "Xóa tài khoản vĩnh viễn?",
+        content: "Toàn bộ dữ liệu tài khoản, kèo, tin nhắn liên kết sẽ bị "
+            "xóa và KHÔNG THỂ khôi phục. Bạn có chắc chắn muốn tiếp tục?",
+        cancelLabel: "Hủy",
+        confirmLabel: "Xóa vĩnh viễn",
+        confirmColors: const [Color(0xFFEF4444), Color(0xFFB91C1C)],
+        confirmTextColor: Colors.white,
+        onCancel: () => Navigator.pop(ctx, false),
+        onConfirm: () => Navigator.pop(ctx, true),
       ),
     );
 
@@ -256,23 +392,35 @@ class _ProfilePageState extends State<ProfilePage> {
     final passwordController = TextEditingController();
     final password = await showDialog<String>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text("Xác nhận mật khẩu"),
-        content: TextField(
+      builder: (ctx) => _GlassAlertDialog(
+        icon: Icons.lock_outline,
+        iconColor: accentOrange,
+        title: "Xác nhận mật khẩu",
+        content: null,
+        inputField: TextField(
           controller: passwordController,
           obscureText: true,
-          decoration: const InputDecoration(labelText: "Nhập mật khẩu hiện tại"),
+          style: const TextStyle(color: Colors.white),
+          cursorColor: Colors.white,
+          decoration: InputDecoration(
+            labelText: "Nhập mật khẩu hiện tại",
+            labelStyle: const TextStyle(color: Colors.white60),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide(color: Colors.white.withOpacity(0.25)),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide(color: accentOrange),
+            ),
+          ),
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, null),
-            child: const Text("Hủy"),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx, passwordController.text),
-            child: const Text("Xác nhận"),
-          ),
-        ],
+        cancelLabel: "Hủy",
+        confirmLabel: "Xác nhận",
+        confirmColors: const [Colors.white, Colors.white],
+        confirmTextColor: primaryBlue,
+        onCancel: () => Navigator.pop(ctx, null),
+        onConfirm: () => Navigator.pop(ctx, passwordController.text),
       ),
     );
 
@@ -502,13 +650,14 @@ class _ProfilePageState extends State<ProfilePage> {
                     ),
                     child: ElevatedButton.icon(
                       onPressed: _logout,
-                      icon: const Icon(Icons.logout),
+                      icon: const Icon(Icons.logout, size: 16),
                       label: const Text("Đăng xuất"),
                       style: ElevatedButton.styleFrom(
                         backgroundColor: Colors.transparent,
                         shadowColor: Colors.transparent,
                         foregroundColor: textWhite,
-                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        padding: const EdgeInsets.symmetric(vertical: 8),
+                        textStyle: const TextStyle(fontSize: 13),
                       ),
                     ),
                   ),
@@ -526,12 +675,18 @@ class _ProfilePageState extends State<ProfilePage> {
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 TextButton(
-                  onPressed: () => _openUrl(AppConfig.privacyPolicyUrl),
+                  onPressed: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const PrivacyPolicyPage()),
+                  ),
                   child: const Text("Chính sách bảo mật", style: TextStyle(color: Colors.white70)),
                 ),
                 const Text("•", style: TextStyle(color: Colors.white38)),
                 TextButton(
-                  onPressed: () => _openUrl(AppConfig.termsOfServiceUrl),
+                  onPressed: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const TermsOfServicePage()),
+                  ),
                   child: const Text("Điều khoản sử dụng", style: TextStyle(color: Colors.white70)),
                 ),
               ],
@@ -539,18 +694,46 @@ class _ProfilePageState extends State<ProfilePage> {
           ),
 
           // 🆕 Xóa tài khoản — tách riêng, màu đỏ cảnh báo, không để chung
-          // hàng với các action thường để tránh bấm nhầm.
-          Container(
-            margin: const EdgeInsets.symmetric(horizontal: 32),
-            child: OutlinedButton.icon(
-              onPressed: _loading ? null : _confirmAndDeleteAccount,
-              style: OutlinedButton.styleFrom(
-                minimumSize: const Size.fromHeight(48),
-                foregroundColor: Colors.redAccent,
-                side: const BorderSide(color: Colors.redAccent),
+          // hàng với các action thường để tránh bấm nhầm. Dùng dạng pill
+          // kính mờ đỏ nhạt cho đồng bộ tone "glass" của toàn trang, thay
+          // vì OutlinedButton mặc định (vuông, lạc tone).
+          Center(
+            child: Container(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(30),
+                color: Colors.redAccent.withOpacity(0.14),
+                border: Border.all(
+                  color: Colors.redAccent.withOpacity(0.4),
+                  width: 1,
+                ),
               ),
-              icon: const Icon(Icons.delete_forever),
-              label: const Text("Xóa tài khoản"),
+              child: Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(30),
+                  onTap: _loading ? null : _confirmAndDeleteAccount,
+                  child: const Padding(
+                    padding:
+                    EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.delete_outline,
+                            color: Colors.redAccent, size: 16),
+                        SizedBox(width: 6),
+                        Text(
+                          "Xóa tài khoản",
+                          style: TextStyle(
+                            color: Colors.redAccent,
+                            fontSize: 12.5,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
             ),
           ),
 

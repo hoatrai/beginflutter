@@ -1170,17 +1170,30 @@ class _ProductDetailPageState extends State<ProductDetailPage>
       }
     }
 
+    // 🆕 Ảnh/video "khoảnh khắc bàn nhậu" (_inviteMedia, đã được server xác
+    // nhận qua _fetchInviteMedia()) — trước đây chỉ hiện ở mục "Khoảnh khắc"
+    // bên dưới, KHÔNG được gộp vào slide chính, nên vừa upload xong quay lại
+    // trang chi tiết sẽ không thấy ngay trên slide đầu trang. Giờ gộp thêm
+    // vào đây để slide chính luôn phản ánh đúng những gì vừa upload.
+    final partyVideoUrls = _inviteMedia.where((m) => m.isVideo).map((m) => m.url).toList();
+    final partyImageUrls = _inviteMedia.where((m) => !m.isVideo).map((m) => m.url).toList();
+
     final mediaList = [
       ...videoUrls.map((url) => {'type': 'video', 'url': url}),
+      ...partyVideoUrls.map((url) => {'type': 'video', 'url': url}),
       ...images.map((e) => {'type': 'image', 'url': (e as Map)['src']}),
+      ...partyImageUrls.map((url) => {'type': 'image', 'url': url}),
     ];
 
-    // 🔧 FIX: so sánh danh sách URL video hiện tại với lần init trước, thay
-    // vì dùng cờ `_videoInited` chỉ chạy một lần. Nếu sản phẩm được sửa sau
-    // (videoUrls đổi), ta re-init lại carousel; nếu không đổi thì bỏ qua để
-    // tránh dispose/tạo lại controller không cần thiết mỗi lần rebuild.
-    if (!listEquals(_initedVideoUrls, videoUrls)) {
-      _initedVideoUrls = List<String>.from(videoUrls);
+    // 🔧 FIX: so sánh danh sách URL video hiện tại (gồm cả video "khoảnh
+    // khắc") với lần init trước, thay vì dùng cờ `_videoInited` chỉ chạy
+    // một lần. Nếu sản phẩm được sửa sau (videoUrls đổi) hoặc có video
+    // khoảnh khắc mới được _fetchInviteMedia() trả về, ta re-init lại
+    // carousel; nếu không đổi thì bỏ qua để tránh dispose/tạo lại
+    // controller không cần thiết mỗi lần rebuild.
+    final allVideoUrls = [...videoUrls, ...partyVideoUrls];
+    if (!listEquals(_initedVideoUrls, allVideoUrls)) {
+      _initedVideoUrls = List<String>.from(allVideoUrls);
       WidgetsBinding.instance.addPostFrameCallback((_) => _initVideos(mediaList));
     }
 

@@ -100,6 +100,200 @@ class _MyKeoPageState extends State<MyKeoPage> {
     }
   }
 
+  void _showThemedSnackBar(String message, {bool isError = false}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        behavior: SnackBarBehavior.floating,
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        padding: EdgeInsets.zero,
+        content: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(14),
+            gradient: LinearGradient(
+              colors: isError
+                  ? [Colors.red.shade900, Colors.red.shade600]
+                  : [Colors.blue.shade900, Colors.orange.shade700.withOpacity(.85)],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(.35),
+                blurRadius: 12,
+                offset: const Offset(0, 6),
+              ),
+            ],
+          ),
+          child: Row(
+            children: [
+              Icon(
+                isError ? Icons.error_outline : Icons.local_bar,
+                color: Colors.white,
+                size: 20,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  message,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 13,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _closeKeo(dynamic keoId) async {
+    if (keoId == null) return;
+
+    final confirm = await showDialog<bool>(
+      context: context,
+      barrierColor: Colors.black.withOpacity(.6),
+      builder: (ctx) => Dialog(
+        backgroundColor: Colors.transparent,
+        insetPadding: const EdgeInsets.symmetric(horizontal: 32),
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(20, 24, 20, 16),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(20),
+            gradient: LinearGradient(
+              colors: [
+                Colors.blue.shade900,
+                Colors.orange.shade700.withOpacity(.85),
+              ],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(.4),
+                blurRadius: 20,
+                offset: const Offset(0, 10),
+              ),
+            ],
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.local_bar, color: Colors.orangeAccent, size: 40),
+              const SizedBox(height: 12),
+              const Text(
+                "Đóng kèo",
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                "Bạn có chắc muốn đóng kèo này không?\nHành động này không thể hoàn tác.",
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: Colors.white70,
+                  fontSize: 13,
+                  height: 1.4,
+                ),
+              ),
+              const SizedBox(height: 20),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: () => Navigator.pop(ctx, false),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: Colors.white,
+                        side: const BorderSide(color: Colors.white54),
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                      child: const Text("Huỷ"),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: ElevatedButton(
+                      onPressed: () => Navigator.pop(ctx, true),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.red.shade600,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        elevation: 0,
+                      ),
+                      child: const Text(
+                        "Đóng kèo",
+                        style: TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    if (confirm != true) return;
+
+    try {
+      final token = await StorageHelper.read("jwt_token") ?? "";
+
+      // Endpoint thật: POST /wp-json/nhau/v1/invite/close
+      // Backend lấy user_id từ JWT, chỉ cần gửi invite_id lên.
+      final res = await http.post(
+        Uri.parse("${AppConfig.webDomain}/wp-json/nhau/v1/invite/close"),
+        headers: {
+          "Authorization": "Bearer $token",
+          "Content-Type": "application/json",
+        },
+        body: json.encode({"invite_id": keoId}),
+      );
+
+      debugPrint("CLOSE KEO STATUS = ${res.statusCode}");
+      debugPrint("CLOSE KEO BODY = ${res.body}");
+
+      // ⚠️ Backend trả HTTP 200 ngay cả khi thất bại (vd: "Không có quyền",
+      // "Invite không tồn tại"), nên phải check field 'success' trong body,
+      // không chỉ dựa vào statusCode.
+      Map<String, dynamic>? data;
+      try {
+        final decoded = json.decode(res.body);
+        if (decoded is Map<String, dynamic>) data = decoded;
+      } catch (_) {}
+
+      final ok = res.statusCode == 200 && data != null && data['success'] == true;
+
+      if (ok) {
+        _showThemedSnackBar("Đã đóng kèo thành công");
+        setState(() => loading = true);
+        await _loadMyKeo(); // refresh lại danh sách
+      } else {
+        final msg = data?['message']?.toString() ?? "Đóng kèo thất bại, thử lại sau";
+        _showThemedSnackBar(msg, isError: true);
+      }
+    } catch (e) {
+      debugPrint("CLOSE KEO ERROR: $e");
+      _showThemedSnackBar("Có lỗi xảy ra khi đóng kèo", isError: true);
+    }
+  }
+
 
   @override
   Widget build(BuildContext context) {
@@ -366,6 +560,36 @@ class _MyKeoPageState extends State<MyKeoPage> {
                             child: _buildBadge(
                               '${p['slots']} slot',
                               Colors.black.withOpacity(.7),
+                            ),
+                          ),
+
+                        // ===== NÚT ĐÓNG KÈO (đè lên góc dưới-phải ảnh,
+                        // chỉ hiện với kèo của chính host, đang mở) =====
+                        if (p['host_id'].toString() == widget.myUserId &&
+                            p['status'].toString().trim() == 'open')
+                          Positioned(
+                            bottom: 8,
+                            right: 8,
+                            child: GestureDetector(
+                              onTap: () => _closeKeo(p['id']),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 10,
+                                  vertical: 6,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: Colors.red.shade600,
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: const Text(
+                                  "Đóng kèo",
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ),
                             ),
                           ),
                       ],
