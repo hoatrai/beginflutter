@@ -15,6 +15,7 @@ import 'package:intl/intl.dart';
 import '../helpers/storage_helper.dart';
 import 'product_detail_page.dart';
 import 'chat_list_page.dart';
+import 'newsfeed_page.dart';
 import 'user_info_page.dart';
 import 'my_keo_page.dart';
 import 'create_invite_page.dart';
@@ -3908,6 +3909,18 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
                           ],
                         ),
                       ),
+                    ),
+
+                    // 🎬 NEWSFEED (video) — thêm mới
+                    IconButton(
+                      icon: const Icon(Icons.video_collection_rounded, color: Colors.white),
+                      tooltip: "Newsfeed",
+                      onPressed: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(builder: (_) => const NewsfeedPage()),
+                        );
+                      },
                     ),
 
                     // 🔔 NOTIFICATION ICON — thêm mới
