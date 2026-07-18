@@ -6,6 +6,8 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:phoenix_socket/phoenix_socket.dart';
+import 'package:video_player/video_player.dart';
+import 'package:shimmer/shimmer.dart' as shimmer;
 import 'package:http/http.dart' as http;
 import '../services/wordpress_service.dart';
 //import 'chat_page_phoenix.dart';
@@ -235,6 +237,12 @@ class _MapPageState extends State<MapPage>
         "lng": parseDouble(e['lng']),
         "time": e['time'],
         "type": e['type'] ?? "",
+        // ❌ Đã bỏ party_media_image_url/party_media_video_url ở đây vì API
+        // nearby-deals KHÔNG trả 2 field này (đó là field tạm bên shop_page
+        // dùng nội bộ, không phải data thật). Media "khoảnh khắc" thật sự
+        // được fetch lazy trong _DealDetailDialog qua 2 bước:
+        // (1) product_id -> GET /wp-json/nhau/v1/invite/by-product -> invite_id
+        // (2) invite_id  -> GET /wp-json/nhau/v1/invite/media      -> items[]
       }).toList();
 
       setState(() {});
@@ -1235,8 +1243,32 @@ out center tags;
                     deal: deal,
                     dealColor: color,
                     wpService: wpService,
+                    jwtToken: jwtToken,
                     primaryBlue: const Color(0xFF1E3A8A),
                     accentOrange: const Color(0xFFFF7F50),
+                    // 🆕 Việc điều hướng sang trang detail được giao lại cho
+                    // MapPage tự làm (thay vì dialog tự Navigator.pop rồi push
+                    // bằng context của chính nó, dễ vỡ vì context đã bị pop).
+                    // Quan trọng hơn: sau khi quay lại từ trang detail (nơi
+                    // user có thể vừa đăng ảnh/video khoảnh khắc), MapPage sẽ
+                    // tự load lại nearbyDeals để marker/popup lần sau hiện
+                    // đúng media mới nhất — trước đây bị thiếu bước này nên
+                    // vừa đăng video xong quay lại Map vẫn không thấy.
+                    onOpenDetail: (productJson) async {
+                      Navigator.pop(context); // đóng dialog
+                      await Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => ProductDetailPage(product: productJson),
+                        ),
+                      );
+                      if (_currentPosition != null) {
+                        await loadNearbyDeals(
+                          _currentPosition!.latitude,
+                          _currentPosition!.longitude,
+                        );
+                      }
+                    },
                   ),
                 );
               },
@@ -1618,15 +1650,19 @@ class _DealDetailDialog extends StatefulWidget {
   final Map<String, dynamic> deal;
   final Color dealColor;
   final WordPressService wpService;
+  final String jwtToken;
   final Color primaryBlue;
   final Color accentOrange;
+  final Future<void> Function(Map<String, dynamic> productJson) onOpenDetail;
 
   const _DealDetailDialog({
     required this.deal,
     required this.dealColor,
     required this.wpService,
+    required this.jwtToken,
     required this.primaryBlue,
     required this.accentOrange,
+    required this.onOpenDetail,
   });
 
   @override
@@ -1635,6 +1671,112 @@ class _DealDetailDialog extends StatefulWidget {
 
 class _DealDetailDialogState extends State<_DealDetailDialog> {
   bool _loadingDetail = false;
+
+  // 🆕 Nguồn media THẬT của "khoảnh khắc bàn nhậu" — KHÔNG nằm trong field
+  // của deal/product, mà nằm ở 1 hệ thống "invite" riêng, phải fetch qua 2 bước:
+  //   (1) product_id -> GET /wp-json/nhau/v1/invite/by-product -> invite_id
+  //   (2) invite_id  -> GET /wp-json/nhau/v1/invite/media      -> items[]
+  // Lấy item mới nhất (id lớn nhất) theo từng loại video/ảnh.
+  bool _loadingMedia = true;
+  String? _fetchedVideoUrl;
+  String? _fetchedImageUrl;
+
+  // Ảnh gốc "đã đăng" lúc tạo kèo — chỉ dùng làm fallback CUỐI CÙNG, khi kèo
+  // chưa có khoảnh khắc video/ảnh nào (y hệt ảnh trong _openDetail()).
+  String? _fallbackImageUrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadMedia();
+  }
+
+  Future<void> _loadMedia() async {
+    await _fetchInviteMedia();
+    if (!mounted) return;
+    if (_fetchedVideoUrl == null && _fetchedImageUrl == null) {
+      await _fetchFallbackImage();
+    }
+    if (mounted) setState(() => _loadingMedia = false);
+  }
+
+  Future<void> _fetchInviteMedia() async {
+    final rawId = widget.deal['id'];
+    final productId = int.tryParse(rawId?.toString() ?? '');
+    if (productId == null) return;
+
+    final base = "${AppConfig.webDomain}/wp-json/nhau/v1";
+    final headers = {
+      "Authorization": "Bearer ${widget.jwtToken}",
+      "Content-Type": "application/json",
+    };
+
+    try {
+      // B1: product_id -> invite_id
+      final inviteRes = await http.get(
+        Uri.parse("$base/invite/by-product?product_id=$productId"),
+        headers: headers,
+      );
+      if (inviteRes.statusCode != 200) return;
+      final inviteData = jsonDecode(inviteRes.body) as Map<String, dynamic>;
+      if (inviteData['success'] != true) return;
+      final inviteId = int.tryParse(inviteData['invite_id']?.toString() ?? '');
+      if (inviteId == null) return;
+
+      // B2: invite_id -> danh sách media khoảnh khắc
+      final mediaRes = await http.get(Uri.parse("$base/invite/media?invite_id=$inviteId"));
+      if (mediaRes.statusCode != 200) return;
+      final mediaData = jsonDecode(mediaRes.body) as Map<String, dynamic>;
+      if (mediaData['success'] != true) return;
+
+      final items = (mediaData['items'] as List? ?? []);
+      Map<String, dynamic>? latestVideo;
+      Map<String, dynamic>? latestImage;
+      for (final raw in items) {
+        if (raw is! Map) continue;
+        final m = raw.cast<String, dynamic>();
+        final type = m['type']?.toString() ?? 'image';
+        final id = int.tryParse(m['id']?.toString() ?? '') ?? 0;
+        if (type == 'video') {
+          final curId = int.tryParse(latestVideo?['id']?.toString() ?? '') ?? -1;
+          if (latestVideo == null || id > curId) latestVideo = m;
+        } else {
+          final curId = int.tryParse(latestImage?['id']?.toString() ?? '') ?? -1;
+          if (latestImage == null || id > curId) latestImage = m;
+        }
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _fetchedVideoUrl = latestVideo?['url']?.toString();
+        _fetchedImageUrl = latestImage?['url']?.toString();
+      });
+    } catch (e) {
+      debugPrint("⚠️ Không fetch được khoảnh khắc cho kèo $productId: $e");
+    }
+  }
+
+  Future<void> _fetchFallbackImage() async {
+    final rawId = widget.deal['id'];
+    final productId = int.tryParse(rawId?.toString() ?? '');
+    if (productId == null) return;
+
+    try {
+      final productJson = await widget.wpService.fetchProductById(productId);
+      if (!mounted) return;
+      final images = productJson?['images'];
+      if (images is List && images.isNotEmpty) {
+        final first = images.first;
+        final src = first is Map ? first['src']?.toString() : first?.toString();
+        if (src != null && src.isNotEmpty) {
+          setState(() => _fallbackImageUrl = src);
+        }
+      }
+    } catch (e) {
+      debugPrint("⚠️ Không fetch được ảnh gốc cho kèo $productId: $e");
+    }
+  }
+
 
   // ===== Status info =====
   Map<String, dynamic> get _statusInfo {
@@ -1680,17 +1822,12 @@ class _DealDetailDialogState extends State<_DealDetailDialog> {
     return s.isEmpty ? 'Chi tiết kèo' : s;
   }
 
-  String? get _imageUrl {
-    final deal = widget.deal;
-    final candidate = deal['image'] ??
-        deal['thumbnail'] ??
-        (deal['images'] is List && (deal['images'] as List).isNotEmpty
-            ? (deal['images'] as List).first
-            : null);
-    final url = candidate?.toString();
-    if (url == null || url.isEmpty) return null;
-    return url;
-  }
+  // Ảnh khoảnh khắc mới nhất — lấy từ _fetchInviteMedia() (nguồn thật),
+  // không còn đọc field party_media_image_url (không tồn tại trong API).
+  String? get _partyImageUrl => _fetchedImageUrl;
+
+  // Video khoảnh khắc mới nhất — nếu có thì hiện full-bleed thay cho ảnh.
+  String? get _videoUrl => _fetchedVideoUrl;
 
   String get _dealType {
     return widget.deal['type']?.toString().trim() ?? '';
@@ -1723,11 +1860,7 @@ class _DealDetailDialogState extends State<_DealDetailDialog> {
       );
       return;
     }
-    Navigator.pop(context);
-    Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => ProductDetailPage(product: productJson)),
-    );
+    await widget.onOpenDetail(productJson);
   }
 
   @override
@@ -1735,7 +1868,9 @@ class _DealDetailDialogState extends State<_DealDetailDialog> {
     final status = _statusInfo;
     final typeStyle = _getTypeStyle(_dealType);
     final participantCount = _participantCount;
-    final imageUrl = _imageUrl;
+    final videoUrl = _videoUrl;
+    // Ảnh khoảnh khắc (nếu có) được ưu tiên hơn ảnh gốc lúc đăng kèo.
+    final imageUrl = _partyImageUrl ?? _fallbackImageUrl;
 
     return Dialog(
       backgroundColor: Colors.transparent,
@@ -1755,21 +1890,34 @@ class _DealDetailDialogState extends State<_DealDetailDialog> {
             mainAxisSize: MainAxisSize.min,
             children: [
 
-              // ===== IMAGE BLOCK =====
+              // ===== MEDIA BLOCK (video full-bleed nếu có, không thì mới show ảnh) =====
               SizedBox(
-                height: 148,
+                height: videoUrl != null ? 200 : 148,
                 width: double.infinity,
                 child: Stack(
                   fit: StackFit.expand,
                   children: [
-                    if (imageUrl != null)
+                    if (videoUrl != null)
+                      _DealVideoPreview(
+                        url: videoUrl,
+                        fallback: imageUrl != null
+                            ? Image.network(
+                          imageUrl,
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, __, ___) => _GradientPlaceholder(),
+                        )
+                            : _GradientPlaceholder(),
+                      )
+                    else if (imageUrl != null)
                       Image.network(
                         imageUrl,
                         fit: BoxFit.cover,
                         errorBuilder: (_, __, ___) => _GradientPlaceholder(),
                       )
-                    else
-                      _GradientPlaceholder(),
+                    else if (_loadingMedia)
+                        _MediaShimmer()
+                      else
+                        _GradientPlaceholder(),
 
                     // Overlay tối trên
                     Container(
@@ -1907,6 +2055,123 @@ class _DealDetailDialogState extends State<_DealDetailDialog> {
           ),
         ),
       ),
+    );
+  }
+}
+
+// ==================== DEAL VIDEO PREVIEW (full-bleed trong popup) ====================
+// Autoplay + loop, mute mặc định (giống _CardVideoPreview bên shop_page),
+// nhưng có thêm nút tap để bật/tắt tiếng vì đây là popup chi tiết chứ
+// không phải preview lướt nhanh trong list.
+class _DealVideoPreview extends StatefulWidget {
+  final String url;
+  // Widget hiện ra nếu video load lỗi — video vẫn được ưu tiên thử trước,
+  // nhưng lỗi thì rớt xuống ảnh thay vì bỏ trắng placeholder.
+  final Widget fallback;
+  const _DealVideoPreview({required this.url, required this.fallback});
+
+  @override
+  State<_DealVideoPreview> createState() => _DealVideoPreviewState();
+}
+
+class _DealVideoPreviewState extends State<_DealVideoPreview> {
+  VideoPlayerController? _controller;
+  bool _muted = true;
+  bool _failed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _init();
+  }
+
+  Future<void> _init() async {
+    try {
+      final ctrl = VideoPlayerController.networkUrl(Uri.parse(widget.url));
+      await ctrl.initialize();
+      if (!mounted) {
+        ctrl.dispose();
+        return;
+      }
+      ctrl.setLooping(true);
+      ctrl.setVolume(0); // mute mặc định giống autoplay video ở feed
+      ctrl.play();
+      setState(() => _controller = ctrl);
+    } catch (_) {
+      if (mounted) setState(() => _failed = true);
+    }
+  }
+
+  void _toggleMute() {
+    final ctrl = _controller;
+    if (ctrl == null) return;
+    setState(() {
+      _muted = !_muted;
+      ctrl.setVolume(_muted ? 0 : 1);
+    });
+  }
+
+  @override
+  void dispose() {
+    _controller?.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_failed) return widget.fallback;
+
+    final ctrl = _controller;
+    if (ctrl == null || !ctrl.value.isInitialized) {
+      return _MediaShimmer();
+    }
+
+    return GestureDetector(
+      onTap: _toggleMute,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          FittedBox(
+            fit: BoxFit.cover,
+            child: SizedBox(
+              width: ctrl.value.size.width,
+              height: ctrl.value.size.height,
+              child: VideoPlayer(ctrl),
+            ),
+          ),
+          Positioned(
+            bottom: 10,
+            right: 10,
+            child: Container(
+              width: 30,
+              height: 30,
+              decoration: BoxDecoration(
+                color: Colors.black.withOpacity(0.4),
+                shape: BoxShape.circle,
+              ),
+              child: Icon(
+                _muted ? Icons.volume_off_rounded : Icons.volume_up_rounded,
+                size: 15,
+                color: Colors.white,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ==================== MEDIA SHIMMER (skeleton loading cho khối media) ====================
+// Dùng chung khi video đang khởi tạo hoặc đang fetch ảnh gốc "đã đăng".
+class _MediaShimmer extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return shimmer.Shimmer.fromColors(
+      baseColor: Colors.white.withOpacity(0.10),
+      highlightColor: Colors.white.withOpacity(0.28),
+      period: const Duration(milliseconds: 1300),
+      child: Container(color: Colors.white),
     );
   }
 }
