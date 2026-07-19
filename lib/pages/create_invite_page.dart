@@ -203,7 +203,7 @@ class _CreateInvitePageState extends State<CreateInvitePage> with TickerProvider
   }
 
   Future<String> _uploadImage(File file) async {
-    const username = 'admin';
+    const username = 'adminroot';
     const appPassword = 'hWfZ33bkTXZGsuK18zFilY1D';
     final credentials = base64Encode(utf8.encode('$username:$appPassword'));
     final uri = Uri.parse('${AppConfig.webDomain}/wp-json/wp/v2/media');
@@ -268,7 +268,7 @@ class _CreateInvitePageState extends State<CreateInvitePage> with TickerProvider
   static const String _videoUploadEndpoint = '${AppConfig.webDomain}/wp-json/nhau/v1/upload-video';
   // Dùng cùng tài khoản Application Password như upload ảnh (_uploadImage) để
   // xác thực với WordPress — endpoint PHP sẽ kiểm tra quyền qua header này.
-  static const String _wpUsername = 'admin';
+  static const String _wpUsername = 'adminroot';
   static const String _wpAppPassword = 'hWfZ33bkTXZGsuK18zFilY1D';
 
   /// Upload video lên server WordPress/Ubuntu của chính mình, báo tiến trình

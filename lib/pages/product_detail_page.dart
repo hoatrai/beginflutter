@@ -65,7 +65,7 @@ abstract class _ApiUrls {
   // 🆕 Upload video lên server riêng (giống create_invite_page) thay vì
   // Cloudinary — cùng endpoint REST WordPress + Application Password.
   static const videoUpload       = '${AppConfig.webDomain}/wp-json/nhau/v1/upload-video';
-  static const wpUsername        = 'admin';
+  static const wpUsername        = 'adminroot';
   static const wpAppPassword     = 'hWfZ33bkTXZGsuK18zFilY1D';
 }
 
