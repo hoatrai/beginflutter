@@ -4,6 +4,7 @@ import 'dart:convert';
 
 import 'login_page.dart';
 import '../helpers/storage_helper.dart';
+import '../services/admin_activity_service.dart';
 import 'edit_profile_page.dart';
 import 'package:shimmer/shimmer.dart' as shimmer;
 import '../config/app_config.dart';
@@ -354,6 +355,7 @@ class _ProfilePageState extends State<ProfilePage> {
     // 🆕 Trước đây hàm này chỉ chuyển màn hình mà KHÔNG xóa token/dữ liệu
     // local -> đăng xuất xong app vẫn coi như còn đăng nhập ở nhiều chỗ
     // (vd sinh trắc học). Phải clear hết secure storage khi đăng xuất.
+    await AdminActivityService().disconnect(); // 🆕 ngắt kênh admin:activity nếu đang nối
     await StorageHelper.clear();
     if (!mounted) return;
     Navigator.pushReplacement(

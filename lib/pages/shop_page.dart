@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'dart:ui';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'dart:async';
@@ -48,6 +49,11 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
   String? district;
   List<Map<String, dynamic>>? findingUsers; // null = chưa load
   bool loadingFinding = false;
+  // 🆕 Badge "khám phá" cho người CHƯA bật tìm kèo — chỉ hiện số THẬT
+  // (đếm từ chính API finding-keo/nearby), tuyệt đối không hardcode/fake.
+  List<Map<String, dynamic>>? discoveryUsers; // null = chưa load xong
+  bool loadingDiscovery = false;
+  Timer? _discoveryTimer;
   bool userChangedFinding = false; // 🔒 khóa sync khi user thao tác
   bool sendingInvite = false;
   bool isOpeningLocation = false;
@@ -398,6 +404,183 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
     // 4. Các tác vụ phụ chạy sau khi UI đã hiện
     fetchChatCount();
     connectSocket();
+
+    // 5. 🆕 Badge khám phá: chỉ có ý nghĩa khi user CHƯA tự bật tìm kèo
+    // (nếu đã bật thì đã thấy list thật trong _buildNearbyFindingList rồi).
+    debugPrint("🔥 [Discovery] _initFlow xong, isFindingKeo=$isFindingKeo → sẽ gọi fetchDiscoveryStats? ${!isFindingKeo}");
+    if (!isFindingKeo) {
+      fetchDiscoveryStats();
+    }
+    _discoveryTimer?.cancel();
+    // WS đã lo phần realtime (finding_keo_on/off), nên polling ở đây chỉ
+    // còn vai trò đồng bộ lại định kỳ (phòng mất kết nối WS, hoặc có
+    // người hết hạn tự động mà server không bắn event tắt).
+    _discoveryTimer = Timer.periodic(const Duration(minutes: 3), (_) {
+      if (!mounted) return;
+      if (activeTabIndexVN.value != 0) return; // đang ở tab khác thì khỏi gọi API dư
+      if (isFindingKeo) return; // đã bật rồi thì không cần badge mời gọi nữa
+      fetchDiscoveryStats();
+    });
+  }
+
+  /// 🆕 Lấy số người THẬT đang bật "Tìm kèo nhanh" quanh vị trí hiện tại,
+  /// dùng để hiển thị badge mời gọi cho người CHƯA bật. Dùng đúng API
+  /// finding-keo/nearby đã có sẵn (server-side, opt-in thật) — không tự
+  /// bịa/hardcode số liệu ở client.
+  /// 🆕 Thêm/cập nhật 1 người vào badge khám phá theo realtime từ WebSocket
+  /// (event finding_keo_on). Chỉ giữ nếu trong bán kính 5km — nếu chưa có
+  /// vị trí của mình thì vẫn thêm tạm, lần fetchDiscoveryStats() kế tiếp
+  /// sẽ tự chỉnh lại chính xác.
+  void _upsertDiscoveryUser(Map<String, dynamic> user) {
+    if (!mounted) return;
+
+    final ulat = double.tryParse(user['lat']?.toString() ?? '');
+    final ulng = double.tryParse(user['lng']?.toString() ?? '');
+
+    double? distanceKm;
+    if (myLat != null && myLng != null && ulat != null && ulng != null) {
+      distanceKm = Geolocator.distanceBetween(myLat!, myLng!, ulat, ulng) / 1000;
+      if (distanceKm > 20.0) return; // ngoài bán kính, bỏ qua
+    }
+
+    final incoming = {...user, 'distance_km': distanceKm};
+
+    setState(() {
+      final list = List<Map<String, dynamic>>.from(discoveryUsers ?? []);
+      final idx = list.indexWhere(
+              (u) => u['user_id'].toString() == user['user_id'].toString());
+      if (idx != -1) {
+        list[idx] = incoming;
+      } else {
+        list.add(incoming);
+      }
+      list.sort((a, b) {
+        final da = (a['distance_km'] as num?) ?? 9999;
+        final db = (b['distance_km'] as num?) ?? 9999;
+        return da.compareTo(db);
+      });
+      discoveryUsers = list;
+    });
+  }
+
+  /// 🆕 Xoá 1 người khỏi badge khám phá khi họ tắt tìm kèo (realtime).
+  void _removeDiscoveryUser(String userId) {
+    if (!mounted) return;
+    setState(() {
+      discoveryUsers =
+          discoveryUsers?.where((u) => u['user_id'].toString() != userId).toList();
+    });
+  }
+
+  Future<void> fetchDiscoveryStats() async {
+    try {
+      debugPrint("🔥 [Discovery] bắt đầu gọi fetchDiscoveryStats()");
+
+      final hasPermission = await ensureLocationPermission(context);
+      debugPrint("🔥 [Discovery] hasPermission = $hasPermission");
+      if (!hasPermission) return;
+      if (!mounted) return;
+
+      loadingDiscovery = true;
+
+      final loc = await getMyLocation();
+      final lat = loc['lat'];
+      final lng = loc['lng'];
+      debugPrint("🔥 [Discovery] lat=$lat lng=$lng");
+      if (lat == null || lng == null) {
+        loadingDiscovery = false;
+        return;
+      }
+
+      final currentUserId = await StorageHelper.read("user_id") ?? "0";
+      final districtName = await getDistrictFromLatLng(lat, lng);
+      debugPrint("🔥 [Discovery] currentUserId=$currentUserId district=$districtName");
+
+      // activity_type để trống = lấy tất cả loại kèo, vì badge này mang
+      // tính tổng quan để mời người dùng bật tính năng, không lọc riêng.
+      final url = Uri.parse(
+        "${AppConfig.webDomain}/wp-json/custom/v1/finding-keo/nearby"
+            "?lat=$lat"
+            "&lng=$lng"
+            "&district=$districtName"
+            "&current_user_id=$currentUserId"
+            "&activity_type=",
+      );
+      debugPrint("🔥 [Discovery] GET $url");
+
+      final res = await http.get(url);
+      debugPrint("🔥 [Discovery] status=${res.statusCode} body=${res.body}");
+      if (res.statusCode != 200) {
+        loadingDiscovery = false;
+        return;
+      }
+
+      final data = jsonDecode(res.body);
+      if (data['success'] != true) {
+        debugPrint("🔥 [Discovery] API trả success=false, dừng lại");
+        if (mounted) setState(() => loadingDiscovery = false);
+        return;
+      }
+
+      // Lọc bỏ user đã bị mình chặn, giống fetchNearbyFindingUsers.
+      final users = List<Map<String, dynamic>>.from(data['data'])
+          .where((u) => !blockedUserIds.contains(u['user_id'].toString()))
+          .toList();
+      debugPrint("🔥 [Discovery] users trả về từ server (trước lọc 5km): ${users.length}");
+
+      // Double-check khoảng cách thật bằng GPS (server đã lọc theo
+      // district, ở đây tính lại km chính xác để hiện "cách xxx m/km"
+      // và giới hạn đúng bán kính 5km trên UI).
+      for (final u in users) {
+        final ulat = double.tryParse(u['lat']?.toString() ?? '');
+        final ulng = double.tryParse(u['lng']?.toString() ?? '');
+        if (ulat != null && ulng != null) {
+          u['distance_km'] =
+              Geolocator.distanceBetween(lat, lng, ulat, ulng) / 1000;
+        } else {
+          u['distance_km'] = null;
+        }
+      }
+
+      final within5km = users.where((u) {
+        final d = u['distance_km'];
+        return d == null || d <= 20.0; // giữ lại nếu không có toạ độ (server đã lọc theo district)
+      }).toList()
+        ..sort((a, b) {
+          final da = (a['distance_km'] as num?) ?? 9999;
+          final db = (b['distance_km'] as num?) ?? 9999;
+          return da.compareTo(db);
+        });
+      debugPrint("🔥 [Discovery] users sau lọc 5km: ${within5km.length}");
+
+      if (!mounted) return;
+      setState(() {
+        discoveryUsers = within5km;
+        loadingDiscovery = false;
+      });
+      debugPrint("🔥 [Discovery] ĐÃ SET discoveryUsers = ${discoveryUsers?.length} (isFindingKeo=$isFindingKeo, pageLoaded=$pageLoaded)");
+
+      // Load avatar/tên thật sau, không chặn hiển thị số lượng trước.
+      final ids = within5km.take(6).map((u) => u['user_id'].toString()).toList();
+      if (ids.isNotEmpty) {
+        fetchUsersBulk(ids).then((_) {
+          if (!mounted) return;
+          setState(() {
+            discoveryUsers = discoveryUsers?.map((u) {
+              final id = u['user_id'].toString();
+              return {
+                ...u,
+                'display_name': creatorNames[id] ?? u['display_name'],
+                'avatar_url': creatorAvatars[id] ?? u['avatar_url'],
+              };
+            }).toList();
+          });
+        });
+      }
+    } catch (e) {
+      debugPrint("❌ [Discovery] fetchDiscoveryStats error: $e");
+      if (mounted) setState(() => loadingDiscovery = false);
+    }
   }
 
   // 🆕 Lấy danh sách user đã bị mình chặn, để lọc feed/nearby ở client
@@ -1256,6 +1439,7 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
     autoScrollTimer?.cancel(); // 👈 THÊM DÒNG NÀY
     heartbeatTimer?.cancel();
     _elapsedTimer?.cancel(); // ← THÊM
+    _discoveryTimer?.cancel(); // 🆕
     // 🔧 FIX: channel là `late` nên nếu connectSocket() chưa từng chạy
     // (vd: lỗi xảy ra trước đó), gọi channel.sink sẽ throw
     // LateInitializationError. Guard bằng _socketConnected.
@@ -2494,7 +2678,7 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
       baseColor: Colors.white.withOpacity(0.06),
       highlightColor: Colors.white.withOpacity(0.20),
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
         child: Row(
           children: [
             // Fake image
@@ -2772,6 +2956,10 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
               findingUsers = [...(findingUsers ?? []), newUser];
             }
           });
+
+          // 🆕 Đồng bộ realtime cho badge "khám phá" (discoveryUsers) —
+          // chỉ thêm nếu trong bán kính 5km (nếu đã có vị trí của mình).
+          _upsertDiscoveryUser(newUser);
         }
 
         // 🆕 Có người tắt tìm kèo
@@ -2794,6 +2982,9 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
           });
 
           debugPrint("🔴 findingUsers sau xóa: ${findingUsers?.map((u) => u['user_id']).toList()}");
+
+          // 🆕 Đồng bộ realtime cho badge "khám phá"
+          _removeDiscoveryUser(offUserId);
         }
 
       } catch (_) {
@@ -3147,72 +3338,423 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
 
 
   Widget _buildFindingToggle() {
+    final showDiscovery = !isFindingKeo && discoveryUsers != null && discoveryUsers!.isNotEmpty;
+
+    // 🎨 Redesign: bỏ gradient cam-xanh chạy ngang (quá gắt/rẻ tiền),
+    // chuyển sang nền dark-glass tinh tế, accent chỉ nhấn ở icon + trạng
+    // thái đang bật, đồng bộ ngôn ngữ thiết kế hiện đại (viền mảnh phát
+    // sáng nhẹ, bo góc lớn, đổ bóng mềm theo primaryBlue).
+    final bool active = isFindingKeo;
+    final Color glow = active ? Colors.lightGreen : accentOrange;
+
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12),
-        decoration: BoxDecoration(
-          color: Colors.white.withOpacity(0.15),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: Colors.white24),
-        ),
-        child: Row(
-          children: [
-            const Icon(Icons.location_on, color: Colors.orange, size: 18),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    isFindingKeo && activityType != null
-                        ? "🟢 Đang tìm kèo: $activityType"
-                        : "🎯 Bật để tìm kèo nhanh!",
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                    ),
-                    overflow: TextOverflow.ellipsis,   // 👈 THÊM
-                    maxLines: 1,                       // 👈 THÊM
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(18),
+        child: BackdropFilter(
+          // 🎨 Kính mờ thật: làm nhòe nội dung phía sau (list sản phẩm) thay
+          // vì phủ một khối màu đặc, cho cảm giác nổi/trong suốt tinh tế.
+          filter: ImageFilter.blur(sigmaX: 14, sigmaY: 14),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
+            decoration: BoxDecoration(
+              // Chỉ phủ lớp màu rất mỏng (8-14% alpha) lên trên nội dung đã
+              // được blur, giữ đúng tinh thần "trong suốt" thay vì đặc xanh.
+              gradient: LinearGradient(
+                colors: [
+                  Colors.white.withOpacity(0.10),
+                  primaryBlue.withOpacity(0.14),
+                ],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+              borderRadius: BorderRadius.circular(18),
+              border: Border(
+                // 🎨 Bỏ viền phẳng bao hết 4 cạnh (nhìn cứng/thừa trên nền
+                // kính mờ). Chỉ giữ 1 sợi sáng rất mảnh ở cạnh trên, kiểu
+                // "highlight" ánh sáng chiếu vào mặt kính — tinh tế và sang
+                // hơn nhiều so với border đều 4 phía.
+                top: BorderSide(color: Colors.white.withOpacity(0.25), width: 1),
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: glow.withOpacity(0.15),
+                  blurRadius: 16,
+                  spreadRadius: -2,
+                  offset: const Offset(0, 6),
+                ),
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.12),
+                  blurRadius: 10,
+                  offset: const Offset(0, 4),
+                ),
+              ],
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (showDiscovery) ...[
+                  Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    child: _buildDiscoveryContentRow(),
                   ),
-                  if (isFindingKeo) ...[
-                    const SizedBox(height: 2),
-                    Text(
-                      "Đã chờ: $elapsedMinutes phút  •  ${findingUsers?.length ?? 0} người phù hợp",
-                      style: const TextStyle(
-                        color: Colors.white70,
-                        fontSize: 11,
+                  Divider(color: Colors.white.withOpacity(0.08), height: 1),
+                ],
+                Row(
+                  children: [
+                    // Icon trong khung tròn nhấn accent, thay vì nằm trơ trên nền gradient gắt
+                    Container(
+                      width: 34,
+                      height: 34,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: glow.withOpacity(0.15),
+                        border: Border.all(color: glow.withOpacity(0.4), width: 1),
                       ),
-                      overflow: TextOverflow.ellipsis,   // 👈 THÊM
-                      maxLines: 1,                       // 👈 THÊM
+                      child: Icon(
+                        active ? Icons.radar : Icons.location_on_rounded,
+                        color: glow,
+                        size: 18,
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            active && activityType != null
+                                ? "Đang tìm kèo: $activityType"
+                                : "Bật để tìm kèo nhanh",
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w600,
+                              fontSize: 14,
+                              letterSpacing: 0.1,
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                            maxLines: 1,
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            active
+                                ? "Đã chờ $elapsedMinutes phút  ·  ${findingUsers?.length ?? 0} người phù hợp"
+                                : "Kết nối ngay với người gần bạn",
+                            style: TextStyle(
+                              color: Colors.white.withOpacity(0.55),
+                              fontSize: 11.5,
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                            maxLines: 1,
+                          ),
+                        ],
+                      ),
+                    ),
+                    Switch(
+                      value: isFindingKeo,
+                      activeColor: Colors.white,
+                      activeTrackColor: Colors.lightGreen,
+                      inactiveThumbColor: Colors.white70,
+                      inactiveTrackColor: Colors.white.withOpacity(0.15),
+                      onChanged: (val) async {
+                        userChangedFinding = true;
+                        if (val) {
+                          _showPickActivity(); // 🆕 chọn loại trước
+                        } else {
+                          setState(() {
+                            isFindingKeo = false;
+                            findingOption = null;
+                            activityType = null; // 🆕
+                          });
+                          await findingKeoOff();
+                          fetchDiscoveryStats(); // 🆕 tắt rồi thì hiện lại badge mời gọi
+                        }
+                      },
                     ),
                   ],
-                ],
-              ),
+                ),
+              ],
             ),
-            Switch(
-              value: isFindingKeo,
-              // 🟢 Đổi thành xanh lá, đồng bộ với nút "Chia sẻ" của card
-              // thể loại Nhậu (Colors.lightGreen trong _getCategoryColor).
-              activeColor: Colors.lightGreen,
-              onChanged: (val) async {
-                userChangedFinding = true;
-                if (val) {
-                  _showPickActivity(); // 🆕 chọn loại trước
-                } else {
-                  setState(() {
-                    isFindingKeo = false;
-                    findingOption = null;
-                    activityType = null; // 🆕
-                  });
-                  await findingKeoOff();
-                }
-              },
-            ),
-          ],
+          ),
         ),
       ),
+    );
+  }
+
+  // 🆕 Badge mời gọi cho người CHƯA bật "Tìm kèo nhanh". Chỉ hiện khi có
+  // dữ liệu THẬT trả về từ server (discoveryUsers != null && không rỗng) —
+  // không có ai thì im lặng ẩn đi, tuyệt đối không hiện số giả/số 0 gây cảm
+  // giác sai lệch.
+  // 🆕 Nội dung khám phá — dùng bên trong card gộp với toggle, không có
+  // khung/margin riêng (card cha đã lo phần đó).
+  Widget _buildDiscoveryContentRow() {
+    final count = discoveryUsers!.length;
+
+    final recentCount = discoveryUsers!.where((u) {
+      final raw = u['started_at']?.toString();
+      if (raw == null || raw.isEmpty) return false;
+      try {
+        final started = DateTime.parse(raw.replaceFirst(' ', 'T') + 'Z');
+        return DateTime.now().difference(started).inMinutes <= 5;
+      } catch (_) {
+        return false;
+      }
+    }).length;
+
+    // 🆕 Gộp theo loại kèo (Nhậu/Karaoke/Bar.../Beer Club) để trả lời đúng
+    // câu hỏi "đang tìm kèo gì" ngay tại đây, khỏi phải bấm mở sheet mới biết.
+    final Map<String, int> activityCounts = {};
+    for (final u in discoveryUsers!) {
+      final type = (u['activity_type']?.toString() ?? '').trim();
+      if (type.isEmpty) continue;
+      activityCounts[type] = (activityCounts[type] ?? 0) + 1;
+    }
+    final sortedActivities = activityCounts.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+    final activitySummary = sortedActivities
+        .take(3)
+        .map((e) => "${_emojiForActivity(e.key)} ${e.key} ×${e.value}")
+        .join('   ');
+
+    final preview = discoveryUsers!.take(5).toList();
+    final extra = count - preview.length;
+    const avatarStep = 16.0;
+    final stackWidth = preview.length * avatarStep + 28 + (extra > 0 ? avatarStep : 0);
+
+    return GestureDetector(
+      onTap: _showDiscoveryDetailSheet,
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  "🔥 $count người đang tìm kèo trong bán kính 20 km",
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 13,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                  maxLines: 1,
+                ),
+                if (activitySummary.isNotEmpty) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    activitySummary,
+                    style: const TextStyle(color: Colors.white70, fontSize: 11),
+                    overflow: TextOverflow.ellipsis,
+                    maxLines: 1,
+                  ),
+                ],
+                if (recentCount > 0) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    "⚡ $recentCount người vừa bật tìm kèo gần đây",
+                    style: const TextStyle(color: Colors.white70, fontSize: 11),
+                    overflow: TextOverflow.ellipsis,
+                    maxLines: 1,
+                  ),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          SizedBox(
+            width: stackWidth,
+            height: 38,
+            child: Stack(
+              children: [
+                for (int i = 0; i < preview.length; i++)
+                  Positioned(
+                    left: i * avatarStep,
+                    child: _discoveryAvatar(preview[i]['avatar_url']?.toString() ?? ''),
+                  ),
+                if (extra > 0)
+                  Positioned(
+                    left: preview.length * avatarStep,
+                    child: Container(
+                      width: 33,
+                      height: 33,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: Colors.black87,
+                        border: Border.all(color: Colors.white.withOpacity(0.3), width: 1.5),
+                      ),
+                      child: Center(
+                        child: Text(
+                          "+$extra",
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _discoveryAvatar(String url) {
+    // 🎨 Viền gradient kiểu "story ring" (cam → xanh lá, tông đồng bộ với
+    // accent của app) thay cho viền trắng phẳng, kèm glow nhẹ phía sau —
+    // tạo cảm giác "đang hoạt động/sống động" hiện đại hơn nhiều.
+    return Container(
+      padding: const EdgeInsets.all(2),
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        gradient: const LinearGradient(
+          colors: [Colors.lightGreen, Colors.orangeAccent],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.lightGreen.withOpacity(0.35),
+            blurRadius: 8,
+            spreadRadius: 0.5,
+          ),
+        ],
+      ),
+      child: Container(
+        padding: const EdgeInsets.all(1.5),
+        decoration: const BoxDecoration(
+          shape: BoxShape.circle,
+          color: Color(0xFF0F1B3D), // viền lót tối, tách avatar khỏi ring gradient cho rõ nét
+        ),
+        child: CircleAvatar(
+          radius: 15,
+          backgroundColor: Colors.white24,
+          backgroundImage: url.isNotEmpty ? CachedNetworkImageProvider(url) : null,
+          child: url.isEmpty ? const Icon(Icons.person, size: 16, color: Colors.white70) : null,
+        ),
+      ),
+    );
+  }
+
+  // 🆕 Bottom sheet chi tiết: khoảng cách + loại kèo cho từng người, dữ liệu
+  // lấy thẳng từ discoveryUsers (đã là dữ liệu thật từ server).
+  void _showDiscoveryDetailSheet() {
+    if (discoveryUsers == null || discoveryUsers!.isEmpty) return;
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (context) {
+        return DraggableScrollableSheet(
+          initialChildSize: 0.55,
+          minChildSize: 0.3,
+          maxChildSize: 0.9,
+          expand: false,
+          builder: (context, scrollController) {
+            return Container(
+              decoration: BoxDecoration(
+                color: primaryBlue.withOpacity(0.97),
+                borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+              ),
+              child: Column(
+                children: [
+                  const SizedBox(height: 10),
+                  Container(
+                    width: 40,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: Colors.white30,
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Text(
+                      "🔥 ${discoveryUsers?.length ?? 0} người đang tìm kèo gần bạn",
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16,
+                      ),
+                    ),
+                  ),
+                  Expanded(
+                    child: ListView.builder(
+                      controller: scrollController,
+                      itemCount: discoveryUsers?.length ?? 0,
+                      itemBuilder: (context, index) {
+                        final u = discoveryUsers![index];
+                        final distanceKm = (u['distance_km'] as num?)?.toDouble();
+                        final distanceText = distanceKm == null
+                            ? ""
+                            : (distanceKm < 1
+                            ? "${(distanceKm * 1000).round()} m"
+                            : "${distanceKm.toStringAsFixed(1)} km");
+                        final activity = u['activity_type']?.toString() ?? '';
+
+                        final subtitleParts = <String>[
+                          if (distanceText.isNotEmpty) "Cách $distanceText",
+                          if (activity.isNotEmpty) "Muốn đi $activity",
+                        ];
+
+                        return ListTile(
+                          leading: _discoveryAvatar(u['avatar_url']?.toString() ?? ''),
+                          title: Text(
+                            u['display_name']?.toString() ?? 'Người dùng',
+                            style: const TextStyle(color: Colors.white),
+                          ),
+                          subtitle: Text(
+                            subtitleParts.isEmpty ? "Đang tìm kèo" : subtitleParts.join(' • '),
+                            style: const TextStyle(color: Colors.white70, fontSize: 12),
+                          ),
+                          onTap: () {
+                            Navigator.pop(context);
+                            _openChat(
+                              (u['user_id'] ?? 0).toString(),
+                              u['display_name']?.toString() ?? 'Người dùng',
+                              avatarUrl: u['avatar_url']?.toString() ?? '',
+                            );
+                          },
+                        );
+                      },
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+                    child: SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton(
+                        onPressed: () {
+                          Navigator.pop(context);
+                          userChangedFinding = true;
+                          _showPickActivity();
+                        },
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.lightGreen,
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                        ),
+                        child: const Text(
+                          "🎯 Bật tìm kèo nhanh để tham gia",
+                          style: TextStyle(fontWeight: FontWeight.bold),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
     );
   }
 
@@ -3251,8 +3793,13 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
       },
     );
   }
-  String _getActivityEmoji() {
-    switch (activityType) {
+  String _getActivityEmoji() => _emojiForActivity(activityType);
+
+  // 🆕 Tách riêng để dùng cho bất kỳ loại kèo nào (vd: khi liệt kê tóm tắt
+  // "đang tìm kèo gì" trong khối khám phá), không chỉ activityType hiện tại
+  // của chính người dùng.
+  String _emojiForActivity(String? type) {
+    switch (type) {
       case "Nhậu":      return "🍺";
       case "Karaoke":   return "🎤";
       case "Bar/Pub":   return "🍸";
@@ -4006,7 +4553,7 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
 
               ),
 // 👇 THÊM Ở ĐÂY
-              _buildFindingToggleIfLoaded(),
+              _buildFindingToggleIfLoaded(), // 🆕 card gộp: badge khám phá (nếu có) + toggle
               const SizedBox(height: 6),
               _buildFilterBar(), // ← THÊM
               const SizedBox(height: 10),
@@ -4264,7 +4811,7 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
                                 );
                               },
                               child: Container(
-                                margin: const EdgeInsets.only(bottom: 16),
+                                margin: const EdgeInsets.only(bottom: 16, left: 8, right: 8),
                                 child: _RunningBorderCard(
                                   // 🟢 Dang dien ra: vien "chay" sang quanh khung card.
                                   active: isLive,

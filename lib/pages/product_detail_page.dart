@@ -287,6 +287,33 @@ class _ProductDetailPageState extends State<ProductDetailPage>
   // ── Story-style carousel controller ─────────────────────────────────────────
   final StoryProgressController _storyController = StoryProgressController();
 
+  // 🆕 Vuốt xuống trên carousel để đóng cả trang (không chỉ mỗi carousel).
+  // Gesture được bắt bên trong DoubleTapReaction (bọc carousel), nhưng
+  // hiệu ứng kéo (translate/scale/fade) áp dụng cho TOÀN BỘ Scaffold ở đây.
+  double _dismissDrag = 0;
+  bool _isDismissDragging = false;
+
+  void _onCarouselDragUpdate(double dy) {
+    setState(() {
+      _isDismissDragging = true;
+      _dismissDrag = dy;
+    });
+  }
+
+  void _onCarouselDragEnd(double dy, double velocity) {
+    const closeDistance = 90.0; // kéo xuống > 90px là đóng trang
+    const closeVelocity = 700.0; // hoặc vẩy nhanh xuống dưới
+    if (dy > closeDistance || velocity > closeVelocity) {
+      Navigator.maybePop(context);
+      return;
+    }
+    // Kéo chưa đủ -> cả trang lò xo trả về vị trí gốc
+    setState(() {
+      _isDismissDragging = false;
+      _dismissDrag = 0;
+    });
+  }
+
   // ── WebSocket ──────────────────────────────────────────────────────────────
   late WebSocketChannel _channel;
   Timer? _heartbeatTimer;
@@ -1205,65 +1232,97 @@ class _ProductDetailPageState extends State<ProductDetailPage>
       }
     }
 
+    // 🆕 Tiến độ kéo-để-đóng (0 -> 1), dùng để scale/fade toàn trang theo
+    // ngón tay khi user vuốt xuống trên carousel.
+    final dismissProgress = (_dismissDrag / 260).clamp(0.0, 1.0);
+    final screenWidth = MediaQuery.of(context).size.width;
+    // Kéo xuống thì trang lệch dần sang phải luôn, tạo cảm giác "thu nhỏ
+    // về góc dưới-phải" thay vì tụt thẳng xuống.
+    final dismissDx = dismissProgress * screenWidth * 0.35;
+
     return Scaffold(
-      backgroundColor: const Color(0xFF1E3A8A), // thay vì Colors.transparent
-      body: _GradientBackground(
-        child: SafeArea(
-          child: CustomScrollView(
-            slivers: [
-              // ── Collapsible carousel SliverAppBar ───────────────────────
-              SliverAppBar(
-                pinned: true,
-                expandedHeight: 300,
-                backgroundColor: Colors.transparent,
-                elevation: 0,
-                automaticallyImplyLeading: false,
-                flexibleSpace: FlexibleSpaceBar(
-                  collapseMode: CollapseMode.pin,
-                  background: Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: _buildMediaCarousel(mediaList),
+      backgroundColor: Colors.transparent,
+      body: Stack(
+        children: [
+          // ── Nền full-bleed CÙNG gradient với trang, để khi trang thu nhỏ
+          //    lộ ra phần nền phía sau thì đồng bộ màu, không bị chỏi ──────
+          const Positioned.fill(child: _GradientBackground(child: SizedBox.expand())),
+
+          AnimatedContainer(
+            duration: _isDismissDragging
+                ? Duration.zero
+                : const Duration(milliseconds: 220),
+            curve: Curves.easeOut,
+            transform: Matrix4.identity()
+              ..translate(dismissDx, _dismissDrag)
+              ..scale(1 - dismissProgress * 0.22), // thu nhỏ rõ về góc phải-dưới
+            transformAlignment: Alignment.topLeft,
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(dismissProgress * 28),
+              child: Opacity(
+                opacity: 1 - dismissProgress * 0.25,
+                child: _GradientBackground(
+                  child: SafeArea(
+                    child: CustomScrollView(
+                      slivers: [
+                        // ── Collapsible carousel SliverAppBar ───────────────────────
+                        SliverAppBar(
+                          pinned: true,
+                          expandedHeight: 300,
+                          backgroundColor: Colors.transparent,
+                          elevation: 0,
+                          automaticallyImplyLeading: false,
+                          flexibleSpace: FlexibleSpaceBar(
+                            collapseMode: CollapseMode.pin,
+                            background: Padding(
+                              padding: const EdgeInsets.symmetric(horizontal: 16),
+                              child: _buildMediaCarousel(mediaList),
+                            ),
+                          ),
+                          // Back button always visible when pinned
+                          leading: _backButton(),
+                          actions: [
+                            Padding(
+                              padding: const EdgeInsets.only(right: 12, top: 8),
+                              child: ViewerIndicator(viewerCount: viewerCount),
+                            ),
+                          ],
+                        ),
+
+                        SliverToBoxAdapter(
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 16),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const SizedBox(height: 14),
+
+                                // ── Title & price BELOW the carousel ────────────────
+                                _buildHeaderRow(name, _priceText(priceRange)),
+                                const SizedBox(height: 16),
+
+                                _buildParticipantsSection(),
+                                const SizedBox(height: 16),
+                                _buildMediaSection(),
+                                const SizedBox(height: 16),
+                                _buildActionRow(),
+                                const SizedBox(height: 16),
+                                _buildInfoCard(metaData, description),
+                                const SizedBox(height: 32),
+                                _buildJoinButton(),
+                                const SizedBox(height: 48),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
-                // Back button always visible when pinned
-                leading: _backButton(),
-                actions: [
-                  Padding(
-                    padding: const EdgeInsets.only(right: 12, top: 8),
-                    child: ViewerIndicator(viewerCount: viewerCount),
-                  ),
-                ],
               ),
-
-              SliverToBoxAdapter(
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const SizedBox(height: 14),
-
-                      // ── Title & price BELOW the carousel ────────────────
-                      _buildHeaderRow(name, _priceText(priceRange)),
-                      const SizedBox(height: 16),
-
-                      _buildParticipantsSection(),
-                      const SizedBox(height: 16),
-                      _buildMediaSection(),
-                      const SizedBox(height: 16),
-                      _buildActionRow(),
-                      const SizedBox(height: 16),
-                      _buildInfoCard(metaData, description),
-                      const SizedBox(height: 32),
-                      _buildJoinButton(),
-                      const SizedBox(height: 48),
-                    ],
-                  ),
-                ),
-              ),
-            ],
+            ),
           ),
-        ),
+        ],
       ),
     );
   }
@@ -1311,6 +1370,9 @@ class _ProductDetailPageState extends State<ProductDetailPage>
         // Chỉ hiệu ứng thị giác. Nếu sau này có endpoint "like invite"
         // thì gọi API ở đây.
       },
+      // 🆕 Vuốt xuống trên carousel -> kéo/đóng toàn bộ trang detail.
+      onDragUpdate: _onCarouselDragUpdate,
+      onDragEnd: _onCarouselDragEnd,
       child: StoryProgressCarousel(
         controller: _storyController,
         itemCount: mediaList.length,
@@ -3657,12 +3719,21 @@ class DoubleTapReaction extends StatefulWidget {
   final IconData icon;
   final Color color;
 
+  // 🆕 Vuốt xuống trên carousel để đóng trang: bản thân widget này chỉ
+  // BẮT gesture (vì user đặt tay lên vùng ảnh/video), còn hiệu ứng kéo
+  // thực tế được áp lên TOÀN BỘ trang ở cấp ProductDetailPage thông qua
+  // 2 callback dưới đây, chứ không tự vẽ transform cho riêng carousel.
+  final ValueChanged<double>? onDragUpdate; // dy cộng dồn khi đang kéo
+  final void Function(double dy, double velocity)? onDragEnd;
+
   const DoubleTapReaction({
     super.key,
     required this.child,
     this.onDoubleTap,
     this.icon = Icons.favorite,
     this.color = const Color(0xFFFF4D6D),
+    this.onDragUpdate,
+    this.onDragEnd,
   });
 
   @override
@@ -3678,6 +3749,15 @@ class _FloatingHeart {
 class _DoubleTapReactionState extends State<DoubleTapReaction> {
   final List<_FloatingHeart> _hearts = [];
   final _random = Random();
+
+  // 🆕 Vuốt XUỐNG ngay trên vùng ảnh/video để đóng trang detail — tiện
+  // hơn cho user thay vì phải bấm nút back. Chỉ nhận drag hướng xuống;
+  // vuốt lên vẫn được bỏ qua bình thường (không đóng, không giữ gesture).
+  // LƯU Ý: widget này KHÔNG tự vẽ hiệu ứng kéo cho riêng nó nữa — nó chỉ
+  // bắt gesture rồi báo dy lên ProductDetailPage qua onDragUpdate/onDragEnd
+  // để cả trang (title, giá, mô tả...) cùng trượt theo, không chỉ mỗi
+  // carousel.
+  double _dragDy = 0;
 
   void _handleDoubleTap(TapDownDetails details, BoxConstraints constraints) {
     final dxRatio =
@@ -3695,6 +3775,20 @@ class _DoubleTapReactionState extends State<DoubleTapReaction> {
     widget.onDoubleTap?.call();
   }
 
+  void _onVerticalDragUpdate(DragUpdateDetails details) {
+    // Chỉ tích luỹ khi kéo XUỐNG (delta.dy > 0). Nếu đang ở vị trí gốc
+    // (_dragDy == 0) mà user kéo lên thì bỏ qua luôn, không làm gì cả.
+    if (details.delta.dy < 0 && _dragDy <= 0) return;
+    _dragDy = (_dragDy + details.delta.dy).clamp(0.0, 260.0);
+    widget.onDragUpdate?.call(_dragDy);
+  }
+
+  void _onVerticalDragEnd(DragEndDetails details) {
+    final velocity = details.primaryVelocity ?? 0;
+    widget.onDragEnd?.call(_dragDy, velocity);
+    _dragDy = 0;
+  }
+
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(
@@ -3703,6 +3797,8 @@ class _DoubleTapReactionState extends State<DoubleTapReaction> {
           behavior: HitTestBehavior.opaque,
           onDoubleTapDown: (d) => _handleDoubleTap(d, constraints),
           onDoubleTap: () {}, // bắt buộc để onDoubleTapDown hoạt động
+          onVerticalDragUpdate: _onVerticalDragUpdate,
+          onVerticalDragEnd: _onVerticalDragEnd,
           child: Stack(
             clipBehavior: Clip.none,
             children: [

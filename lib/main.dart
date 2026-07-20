@@ -282,15 +282,19 @@ Future<void> main() async {
   try {
     await Firebase.initializeApp();
     FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
-    await setupFirebaseMessaging();
+    // 🆕 Lớp bảo vệ thứ 2: dù bên trong setupFirebaseMessaging() đã tự
+    // timeout từng bước, vẫn thêm 1 giới hạn tổng ở đây — nếu sau này có
+    // ai thêm 1 await mạng mới bên trong mà quên bọc timeout, app vẫn
+    // không bị treo vô thời hạn ở màn hình logo như lần trước.
+    await setupFirebaseMessaging().timeout(const Duration(seconds: 15));
   } catch (e) {
-    debugPrint('⚠️ Firebase init failed: $e');
+    debugPrint('⚠️ Firebase init failed/timeout: $e');
   }
 
   try {
-    await CallkitService.instance.init();
+    await CallkitService.instance.init().timeout(const Duration(seconds: 10));
   } catch (e) {
-    debugPrint('⚠️ CallkitService init failed: $e');
+    debugPrint('⚠️ CallkitService init failed/timeout: $e');
   }
 
   runApp(const CryptoApp(initialPage: SplashPage()));
@@ -453,7 +457,21 @@ Future<void> setupFirebaseMessaging() async {
   final token = await messaging.getToken();
   debugPrint("FCM Token: $token");
 
-  await messaging.subscribeToTopic("all_devices");
+  // 🆕 FIX: đây là nghi phạm chính khiến app đứng ở màn hình logo — lệnh
+  // gọi mạng tới FCM server này TRƯỚC ĐÂY không có timeout, mà main()
+  // phải await xong setupFirebaseMessaging() mới gọi runApp(). Nếu mạng
+  // chập chờn lúc app vừa mở, await này có thể treo vô thời hạn -> Flutter
+  // chưa kịp vẽ widget nào -> app kẹt ở splash native, không phải lỗi ở
+  // SplashPage (SplashPage thậm chí chưa được build tới).
+  // Subscribe topic không phải bước bắt buộc để app chạy được, nên: giới
+  // hạn thời gian chờ + nuốt lỗi, không để nó chặn cả app khởi động.
+  try {
+    await messaging.subscribeToTopic("all_devices").timeout(
+      const Duration(seconds: 8),
+    );
+  } catch (e) {
+    debugPrint('⚠️ subscribeToTopic lỗi/timeout (bỏ qua, không chặn app): $e');
+  }
 
   // Foreground: app đang mở
   FirebaseMessaging.onMessage.listen((message) {

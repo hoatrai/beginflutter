@@ -9,6 +9,7 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:shimmer/shimmer.dart' as shimmer;
 import '../config/app_config.dart';
 import 'forgot_password_page.dart';
+import '../services/admin_activity_service.dart';
 
 
 
@@ -107,6 +108,7 @@ class _LoginPageState extends State<LoginPage> {
 
 
         if (!mounted) return;
+        AdminActivityService().connect(); // không cần await
         Navigator.pushReplacement(
           context,
           MaterialPageRoute(builder: (_) => const MainPage()),
@@ -182,6 +184,7 @@ class _LoginPageState extends State<LoginPage> {
       }
 
       if (!mounted) return;
+      AdminActivityService().connect(); // không cần await
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(builder: (_) => const MainPage()),

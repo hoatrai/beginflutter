@@ -8,6 +8,7 @@ import '../main.dart';
 import 'set_password_page.dart';
 import 'package:shimmer/shimmer.dart' as shimmer;
 import '../config/app_config.dart';
+import '../services/admin_activity_service.dart';
 
 class SplashPage extends StatefulWidget {
   const SplashPage({super.key});
@@ -118,6 +119,11 @@ class _SplashPageState extends State<SplashPage> {
 
   void _goMain() {
     if (!mounted) return;
+    // 🆕 Auto-login qua token cũ (cách adminroot vào app hầu hết mọi lần)
+    // cũng phải khởi động AdminActivityService — không chỉ lúc gõ tay
+    // username/password. Nếu user hiện tại không phải admin, service tự
+    // no-op (WordPress trả 403 lúc xin vé) nên gọi vô điều kiện là an toàn.
+    AdminActivityService().connect(); // không cần await
     Navigator.pushReplacement(
       context,
       MaterialPageRoute(builder: (_) => const MainPage()),
