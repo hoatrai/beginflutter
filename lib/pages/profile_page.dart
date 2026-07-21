@@ -356,6 +356,7 @@ class _ProfilePageState extends State<ProfilePage> {
     // local -> đăng xuất xong app vẫn coi như còn đăng nhập ở nhiều chỗ
     // (vd sinh trắc học). Phải clear hết secure storage khi đăng xuất.
     await AdminActivityService().disconnect(); // 🆕 ngắt kênh admin:activity nếu đang nối
+    debugPrint(">>> [DEBUG] clear() called from _logout(): \n${StackTrace.current}");
     await StorageHelper.clear();
     if (!mounted) return;
     Navigator.pushReplacement(
@@ -444,6 +445,7 @@ class _ProfilePageState extends State<ProfilePage> {
       final data = jsonDecode(response.body);
 
       if (response.statusCode == 200) {
+        debugPrint(">>> [DEBUG] clear() called from delete-account: \n${StackTrace.current}");
         await StorageHelper.clear();
         if (!mounted) return;
         Navigator.pushAndRemoveUntil(

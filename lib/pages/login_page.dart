@@ -90,6 +90,24 @@ class _LoginPageState extends State<LoginPage> {
           // luu token firebase
           await sendFcmTokenAfterLogin(int.parse(userId));
 
+          // 🆕 Xin thêm 1 refresh_token (hạn 30 ngày) để dành cho đăng
+          // nhập vân tay/Face ID sau này — không đổi gì luồng đăng nhập
+          // mật khẩu ở trên, chỉ gọi thêm 1 API kèm JWT vừa nhận được.
+          try {
+            final resRefresh = await http.post(
+              Uri.parse("${AppConfig.webDomain}/wp-json/nhau/v1/issue-refresh-token"),
+              headers: {"Authorization": "Bearer $token"},
+            );
+            if (resRefresh.statusCode == 200) {
+              final refreshData = jsonDecode(resRefresh.body);
+              if (refreshData["refresh_token"] != null) {
+                await StorageHelper.write("refresh_token", refreshData["refresh_token"]);
+              }
+            }
+          } catch (e) {
+            debugPrint("issue-refresh-token lỗi (bỏ qua, không chặn đăng nhập): $e");
+          }
+
 
 
 
@@ -164,24 +182,30 @@ class _LoginPageState extends State<LoginPage> {
 
       if (!didAuthenticate) return;
 
-      final token = await StorageHelper.read("jwt_token");
-      final tokenTime = await StorageHelper.read("token_time");
-
-      if (token == null || tokenTime == null) {
+      final refreshToken = await StorageHelper.read("refresh_token");
+      if (refreshToken == null) {
         setState(() {
-          _errorMessage = "⚠️ Chưa có token. Vui lòng đăng nhập bằng tài khoản trước.";
+          _errorMessage = "⚠️ Chưa có phiên đăng nhập trên máy này. Vui lòng đăng nhập bằng tài khoản trước.";
         });
         return;
       }
 
-      final createdAt = DateTime.tryParse(tokenTime);
-      if (createdAt == null ||
-          DateTime.now().difference(createdAt).inHours >= 24) {
+      final response = await http.post(
+        Uri.parse("${AppConfig.webDomain}/wp-json/nhau/v1/refresh-token"),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({"refresh_token": refreshToken}),
+      );
+
+      if (response.statusCode != 200) {
         setState(() {
-          _errorMessage = "⚠️ Phiên đăng nhập đã hết hạn (sau 24h). Vui lòng đăng nhập lại.";
+          _errorMessage = "⚠️ Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại bằng tài khoản.";
         });
         return;
       }
+
+      final data = json.decode(response.body);
+      await StorageHelper.write("jwt_token", data["token"]);
+      await StorageHelper.write("token_time", DateTime.now().toIso8601String());
 
       if (!mounted) return;
       AdminActivityService().connect(); // không cần await

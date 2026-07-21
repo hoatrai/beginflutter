@@ -61,7 +61,12 @@ class _SplashPageState extends State<SplashPage> {
 
         case MeResult.unauthorized:
         // Token thực sự hết hạn/invalid -> chỉ trường hợp này mới xoá & bắt login lại
-          await StorageHelper.clear();
+        // ⚠️ KHÔNG dùng StorageHelper.clear() ở đây vì nó xoá SẠCH toàn bộ
+        // secure storage, kể cả refresh_token (dùng cho đăng nhập vân tay).
+        // Chỉ xoá đúng các key thuộc phiên JWT hiện tại.
+          await StorageHelper.delete("jwt_token");
+          await StorageHelper.delete("user_id");
+          await StorageHelper.delete("user_data");
           _goLogin();
           return;
 
