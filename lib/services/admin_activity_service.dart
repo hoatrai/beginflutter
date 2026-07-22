@@ -199,6 +199,10 @@ class AdminActivityService {
   void _showActivitySnackBar(Map<String, dynamic> payload) {
     final senderId = payload['sender_id'];
     final receiverId = payload['receiver_id'];
+    // 🆕 Ưu tiên hiện tên (WordPress giờ gửi kèm sender_name/receiver_name),
+    // fallback về "User <id>" nếu dữ liệu cũ/thiếu tên.
+    final senderLabel = payload['sender_name'] ?? 'User $senderId';
+    final receiverLabel = payload['receiver_name'] ?? 'User $receiverId';
 
     final context = navigatorKey.currentContext;
     if (context == null) {
@@ -208,7 +212,7 @@ class AdminActivityService {
 
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text("💬 User $senderId vừa nhắn cho User $receiverId"),
+        content: Text("💬 $senderLabel vừa nhắn cho $receiverLabel"),
         duration: const Duration(seconds: 3),
       ),
     );

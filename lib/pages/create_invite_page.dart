@@ -490,7 +490,18 @@ class _CreateInvitePageState extends State<CreateInvitePage> with TickerProvider
         final inviteRes = await http.post(
           Uri.parse('${AppConfig.webDomain}/wp-json/nhau/v1/invite/create'),
           headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ${await StorageHelper.read("jwt_token")}'},
-          body: jsonEncode({'product_id': createdProduct['id'], 'max_people': int.tryParse(_slotsController.text) ?? 0, 'start_time': _timeController.text}),
+          body: jsonEncode({
+            'product_id': createdProduct['id'],
+            'max_people': int.tryParse(_slotsController.text) ?? 0,
+            'start_time': _timeController.text,
+            // 🆕 Gửi kèm danh sách URL video + creator_id để backend lưu
+            // liên kết video -> kèo -> người tạo (dùng cho Newsfeed biết
+            // video nào thuộc kèo nào, của ai). Nếu backend
+            // /invite/create chưa xử lý 2 field này thì cứ bỏ qua, không
+            // ảnh hưởng luồng tạo kèo hiện tại.
+            'video_urls': videoUrls,
+            'creator_id': _userId,
+          }),
         );
         final inviteData = jsonDecode(inviteRes.body);
         if (inviteData['success'] != true) throw Exception("Tạo invite thất bại");

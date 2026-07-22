@@ -3659,7 +3659,13 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
           builder: (context, scrollController) {
             return Container(
               decoration: BoxDecoration(
-                color: primaryBlue.withOpacity(0.97),
+                // 🎨 Đồng bộ tone với các sheet tìm kèo khác (gradient xanh
+                // đậm -> cam nhẹ) thay vì màu xanh dương phẳng đơn điệu.
+                gradient: LinearGradient(
+                  colors: [primaryBlue.withOpacity(0.97), accentOrange.withOpacity(0.55)],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
                 borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
               ),
               child: Column(
@@ -3726,25 +3732,61 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
                     ),
                   ),
                   Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+                    // 🆕 Xích nút lên + cộng thêm safe-area đáy màn hình (home
+                    // indicator/gesture bar) để nút không bị che khuất phía dưới.
+                    padding: EdgeInsets.fromLTRB(
+                      16,
+                      0,
+                      16,
+                      32 + MediaQuery.of(context).padding.bottom,
+                    ),
                     child: SizedBox(
                       width: double.infinity,
-                      child: ElevatedButton(
-                        onPressed: () {
-                          Navigator.pop(context);
-                          userChangedFinding = true;
-                          _showPickActivity();
-                        },
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.lightGreen,
-                          padding: const EdgeInsets.symmetric(vertical: 12),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(10),
+                      height: 52,
+                      child: Material(
+                        color: Colors.transparent,
+                        child: InkWell(
+                          borderRadius: BorderRadius.circular(26),
+                          onTap: () {
+                            Navigator.pop(context);
+                            userChangedFinding = true;
+                            _showPickActivity();
+                          },
+                          child: Ink(
+                            decoration: BoxDecoration(
+                              // 🎨 Gradient cam sáng -> cam đậm, bo tròn kiểu
+                              // viên thuốc, đồng tone với accentOrange của app
+                              // thay vì màu xanh lá phẳng lạc quẻ trước đó.
+                              gradient: LinearGradient(
+                                colors: [
+                                  accentOrange,
+                                  accentOrange.withOpacity(0.85),
+                                ],
+                                begin: Alignment.topLeft,
+                                end: Alignment.bottomRight,
+                              ),
+                              borderRadius: BorderRadius.circular(26),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: accentOrange.withOpacity(0.45),
+                                  blurRadius: 16,
+                                  offset: const Offset(0, 6),
+                                ),
+                              ],
+                            ),
+                            child: const Center(
+                              child: Text(
+                                "🎯 Bật tìm kèo nhanh để tham gia",
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 15,
+                                  letterSpacing: 0.2,
+                                ),
+                                textAlign: TextAlign.center,
+                              ),
+                            ),
                           ),
-                        ),
-                        child: const Text(
-                          "🎯 Bật tìm kèo nhanh để tham gia",
-                          style: TextStyle(fontWeight: FontWeight.bold),
                         ),
                       ),
                     ),
@@ -5058,10 +5100,17 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
                                             ),
                                           ),
 
-                                          // Cot nut hanh dong noi ben phai (chat / bao cao / chia se)
+                                          // Cot nut hanh dong noi ben phai (chat / bao cao / chia se / newsfeed)
+                                          // 🔧 bottom giảm từ 108 -> 66: sau khi thêm nút Newsfeed,
+                                          // cột có 4 icon (cao hơn hẳn bản 3 icon cũ), nếu giữ
+                                          // nguyên 108 thì cột sẽ tràn lên khỏi mép trên của card
+                                          // và bị Stack cắt mất icon Chat. Không lo che chữ tiêu
+                                          // đề/giá bên dưới vì 2 khu vực này tách biệt theo chiều
+                                          // ngang (icon nằm trong dải 66px bên phải đã được padding
+                                          // dành riêng cho nó ở khối text).
                                           Positioned(
                                             right: 12,
-                                            bottom: 108,
+                                            bottom: 66,
                                             child: Column(
                                               children: [
                                                 GestureDetector(
@@ -5179,6 +5228,34 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
                                                         ],
                                                       ),
                                                       child: const Icon(Icons.share, color: Colors.white, size: 14),
+                                                    ),
+                                                  ),
+                                                ),
+                                                const SizedBox(height: 10),
+                                                Tooltip(
+                                                  message: "Xem Newsfeed",
+                                                  child: GestureDetector(
+                                                    onTap: () {
+                                                      final id = product["id"];
+                                                      final int pid = id != null ? int.tryParse(id.toString()) ?? 0 : 0;
+                                                      Navigator.push(
+                                                        context,
+                                                        MaterialPageRoute(
+                                                          builder: (context) => NewsfeedPage(
+                                                            initialProductId: pid == 0 ? null : pid,
+                                                          ),
+                                                        ),
+                                                      );
+                                                    },
+                                                    child: Container(
+                                                      width: 32,
+                                                      height: 32,
+                                                      decoration: BoxDecoration(
+                                                        color: Colors.black38,
+                                                        shape: BoxShape.circle,
+                                                        border: Border.all(color: Colors.white24),
+                                                      ),
+                                                      child: const Icon(Icons.dynamic_feed, color: Colors.white70, size: 16),
                                                     ),
                                                   ),
                                                 ),
