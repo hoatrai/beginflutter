@@ -146,14 +146,18 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
 
     autoScrollTimer = Timer.periodic(
 
-      const Duration(milliseconds: 16),
+      // 🌡️ Giảm từ 16ms (~60 lần/giây) xuống 33ms (~30 lần/giây) — mắt
+      // gần như không phân biệt được sự khác biệt với tốc độ trôi chậm
+      // kiểu này, nhưng giảm được một nửa số lần ép layout/jumpTo() liên
+      // tục, đỡ tải CPU/GPU đáng kể khi để trang mở lâu.
+      const Duration(milliseconds: 33),
 
           (timer) {
 
         if (!mounted) return;
 
         // 🚀 Đang ở tab khác (Map/Group/Profile...) → khỏi jumpTo(), tránh
-        // ép layout lại ListView 60 lần/giây cho 1 trang không hiển thị.
+        // ép layout lại ListView cho 1 trang không hiển thị.
         // IndexedStack giữ nguyên state ShopPage nên Timer vẫn chạy nền
         // nếu không chặn ở đây.
         if (activeTabIndexVN.value != 0) return;
@@ -172,10 +176,17 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
                 .position
                 .maxScrollExtent;
 
+        // 🌡️ List không tràn (vd chỉ 1-2 người đang tìm kèo, vừa đủ màn
+        // hình) → không có gì để cuộn, KHÔNG gọi jumpTo() để tránh ép
+        // layout/repaint vô ích liên tục mỗi tick dù chẳng thay đổi gì.
+        if (maxScroll <= 0) return;
+
         final current =
             _findingScrollController.offset;
 
-        double next = current + 0.8;
+        // Bù lại tốc độ trôi cho khớp với tần suất mới (33ms thay vì
+        // 16ms) để giữ nguyên cảm giác tốc độ cuộn như trước.
+        double next = current + 1.6;
 
         if (next >= maxScroll) {
 
@@ -1026,9 +1037,16 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
       context: context,
       backgroundColor: Colors.transparent,
       isScrollControlled: true,
-      builder: (_) {
+      builder: (ctx) {
         return Container(
-          margin: const EdgeInsets.all(16),
+          // 🆙 Xích lên cao hơn: tăng margin đáy + cộng thêm safe-area (home
+          // indicator/gesture bar) để popup không dính sát mép dưới màn hình.
+          margin: EdgeInsets.fromLTRB(
+            16,
+            16,
+            16,
+            32 + MediaQuery.of(ctx).padding.bottom,
+          ),
           padding: const EdgeInsets.all(20),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(24),
@@ -1407,6 +1425,10 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
       // 🆕 THÊM: reconnect WS khi app về foreground
       _reconnectSocket();
 
+      // 🌡️ Khởi động lại auto-scroll khi quay lại app (đã dừng hẳn lúc
+      // vào nền, xem nhánh paused bên dưới).
+      _startAutoScroll();
+
     } else if (state == AppLifecycleState.paused) {
       // 🆕 THÊM: đóng WS khi app vào background
       if (_socketConnected) {
@@ -1414,6 +1436,12 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
         channel.sink.close();
         _socketConnected = false;
       }
+
+      // 🌡️ Dừng HẲN timer auto-scroll khi app vào nền — trước đây chỉ
+      // "bỏ qua công việc" mỗi tick (check activeTabIndexVN) chứ timer vẫn
+      // đánh thức CPU liên tục kể cả khi app không hiển thị gì cả, góp
+      // phần làm máy nóng/tốn pin khi để app chạy nền lâu.
+      autoScrollTimer?.cancel();
     }
   }
 
@@ -3354,7 +3382,11 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
         child: BackdropFilter(
           // 🎨 Kính mờ thật: làm nhòe nội dung phía sau (list sản phẩm) thay
           // vì phủ một khối màu đặc, cho cảm giác nổi/trong suốt tinh tế.
-          filter: ImageFilter.blur(sigmaX: 14, sigmaY: 14),
+          // 🌡️ Giảm sigma từ 14 -> 8: hiệu ứng kính mờ vẫn rõ nhưng nhẹ tải
+          // GPU hơn đáng kể, vì khối này luôn nằm đè lên ListView sản phẩm
+          // đang cuộn phía sau (mỗi frame cuộn đều phải blur lại nội dung
+          // di chuyển bên dưới).
+          filter: ImageFilter.blur(sigmaX: 8, sigmaY: 8),
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
             decoration: BoxDecoration(
@@ -6026,7 +6058,14 @@ class _CardVideoPreviewState extends State<_CardVideoPreview> {
     _initializing = true;
     try {
       final ctrl = VideoPlayerController.networkUrl(Uri.parse(widget.url));
-      await ctrl.initialize();
+      // 🛡️ Một số máy (chip yếu/driver GPU khác) có thể khiến initialize()
+      // treo vô thời hạn thay vì throw lỗi -> video "không hiện" mãi mãi.
+      // Thêm timeout để chắc chắn rơi vào trạng thái lỗi (_error) thay vì
+      // đứng shimmer loading vĩnh viễn.
+      await ctrl.initialize().timeout(
+        const Duration(seconds: 10),
+        onTimeout: () => throw TimeoutException("Video initialize timeout"),
+      );
       await ctrl.setLooping(true);
       await ctrl.setVolume(0);
 

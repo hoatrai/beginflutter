@@ -56,7 +56,10 @@ class _SplashPageState extends State<SplashPage> {
             return;
           }
 
-          _goMain();
+          _goMain(
+            userData: me,
+            userId: int.tryParse(me['id'].toString()) ?? 0,
+          );
           return;
 
         case MeResult.unauthorized:
@@ -76,7 +79,16 @@ class _SplashPageState extends State<SplashPage> {
           final cachedUserData = await StorageHelper.read("user_data");
           if (cachedUserData != null) {
             debugPrint("⚠️ fetchMe lỗi mạng tạm thời, dùng cache để vào app.");
-            _goMain();
+            Map<String, dynamic>? cachedMap;
+            try {
+              final decoded = jsonDecode(cachedUserData);
+              if (decoded is Map<String, dynamic>) cachedMap = decoded;
+            } catch (_) {}
+            final cachedIdString = await StorageHelper.read("user_id");
+            _goMain(
+              userData: cachedMap,
+              userId: int.tryParse(cachedIdString ?? '') ?? 0,
+            );
           } else {
             debugPrint("⚠️ fetchMe lỗi mạng tạm thời, không có cache -> hiện nút thử lại.");
             if (mounted) {
@@ -90,7 +102,17 @@ class _SplashPageState extends State<SplashPage> {
     // ❗ CHỈ guest-login khi KHÔNG có token
     final ok = await _guestLogin();
     if (ok) {
-      _goMain();
+      final guestUserData = await StorageHelper.read("user_data");
+      final guestUserId = await StorageHelper.read("user_id");
+      Map<String, dynamic>? guestMap;
+      try {
+        final decoded = jsonDecode(guestUserData ?? '');
+        if (decoded is Map<String, dynamic>) guestMap = decoded;
+      } catch (_) {}
+      _goMain(
+        userData: guestMap,
+        userId: int.tryParse(guestUserId ?? '') ?? 0,
+      );
     } else {
       _goLogin();
     }
@@ -122,16 +144,23 @@ class _SplashPageState extends State<SplashPage> {
     }
   }
 
-  void _goMain() {
+  void _goMain({Map<String, dynamic>? userData, int? userId}) {
     if (!mounted) return;
-    // 🆕 Auto-login qua token cũ (cách adminroot vào app hầu hết mọi lần)
+    // ✅ Auto-login qua token cũ (cách adminroot vào app hầu hết mọi lần)
     // cũng phải khởi động AdminActivityService — không chỉ lúc gõ tay
     // username/password. Nếu user hiện tại không phải admin, service tự
     // no-op (WordPress trả 403 lúc xin vé) nên gọi vô điều kiện là an toàn.
     AdminActivityService().connect(); // không cần await
     Navigator.pushReplacement(
       context,
-      MaterialPageRoute(builder: (_) => const MainPage()),
+      MaterialPageRoute(
+        builder: (_) => MainPage(
+          // 🆕 Truyền thẳng data đã có sẵn ở đây để MainPage khỏi phải
+          // đọc lại storage lần 2 -> bỏ hẳn chớp trắng lúc mới vào app.
+          initialUserData: userData,
+          initialUserId: userId,
+        ),
+      ),
     );
   }
 

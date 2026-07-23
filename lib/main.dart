@@ -657,7 +657,12 @@ class CryptoApp extends StatelessWidget {
 // ---------------- MAIN PAGE ----------------
 
 class MainPage extends StatefulWidget {
-  const MainPage({super.key});
+  // 🆕 Nếu nơi gọi (vd SplashPage) đã có sẵn user data, truyền thẳng vào đây
+  // để MainPage khỏi phải đọc lại storage lần 2 -> bỏ hẳn màn hình loading
+  // chớp trắng lúc mới mở app.
+  final Map<String, dynamic>? initialUserData;
+  final int? initialUserId;
+  const MainPage({super.key, this.initialUserData, this.initialUserId});
   @override
   State<MainPage> createState() => _MainPageState();
 }
@@ -688,7 +693,22 @@ class _MainPageState extends State<MainPage>
       CurvedAnimation(parent: _fabController, curve: Curves.easeInOut),
     );
 
-    _bootstrap();
+    // 🆕 Có data truyền sẵn từ SplashPage -> set ngay, khỏi chờ đọc storage
+    // (bỏ hẳn màn hình loading chớp trắng cho luồng vào app phổ biến nhất).
+    if (widget.initialUserData != null) {
+      _userData = widget.initialUserData!;
+      _userId = widget.initialUserId ?? 0;
+      _loading = false;
+      _pageCache[_selectedIndex] = _pageFor(_selectedIndex);
+      if (_userId != 0) {
+        PresenceService.instance.start(
+          userId: _userId,
+          username: _userData['display_name'] ?? _userData['slug'] ?? 'Khách',
+        );
+      }
+    } else {
+      _bootstrap();
+    }
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _openPendingInvite();
@@ -864,8 +884,26 @@ class _MainPageState extends State<MainPage>
           ),
         ),
         child: _loading
-            ? const Center(
-          child: CircularProgressIndicator(color: Color(0xFFFF7F50)),
+            ? Center(
+          // 🎨 Loading dự phòng (chỉ còn xảy ra ở vài luồng chưa có sẵn
+          // data, vd sau khi set mật khẩu) — thêm icon thương hiệu thay
+          // vì chỉ để trơ mỗi spinner giữa nền nhạt trông thiếu sức sống.
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 64,
+                height: 64,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: accentOrange.withOpacity(0.12),
+                ),
+                child: Icon(Icons.local_bar_rounded, color: accentOrange, size: 32),
+              ),
+              const SizedBox(height: 18),
+              const CircularProgressIndicator(color: Color(0xFFFF7F50)),
+            ],
+          ),
         )
             : IndexedStack(
           index: _selectedIndex,
