@@ -11,6 +11,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_html/flutter_html.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
@@ -19,11 +20,14 @@ import 'package:video_compress/video_compress.dart';
 import 'package:video_player/video_player.dart';
 import 'package:video_thumbnail/video_thumbnail.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
+import 'package:audioplayers/audioplayers.dart';
+import 'package:flutter_tts/flutter_tts.dart';
 
 import '../helpers/storage_helper.dart';
 import '../helpers/user_helper.dart';
 import 'group_chat_page.dart';
 import 'invite_map_page.dart';
+import 'newsfeed_page.dart';
 import 'spin_wheel.dart';
 import '../config/app_config.dart';
 import '../app_globals.dart';
@@ -59,6 +63,9 @@ abstract class _ApiUrls {
   static const imageUpload       = '${AppConfig.webDomain}/wp-json/nhau/v1/upload';
   static const profileUsers      = '${AppConfig.webDomain}/wp-json/profile/v1/users';
   static const spinWheel         = '${AppConfig.webDomain}/wp-json/spiritwebs/v1/spin';
+  static const gameNeverHaveIEver = '$base/game/never-have-i-ever';
+  static const gameTruthOrDare    = '$base/game/truth-or-dare';
+  static const gameDiceRoll       = '$base/game/dice-roll';
   static const socketUrl         = AppConfig.websocketUrl;
   static const defaultAvatar     = '${AppConfig.webDomain}/media/2025/10/default-avatar.png';
 
@@ -283,6 +290,7 @@ class _ProductDetailPageState extends State<ProductDetailPage>
   // key = index in the carousel mediaList
   final Map<int, VideoPlayerController> _videoMap = {};
   Map<String, dynamic> _spinResult = {};
+  bool _isSpinningApi = false; // chặn bấm "Quay ngay" nhiều lần khi đang chờ API
 
   // ── Story-style carousel controller ─────────────────────────────────────────
   final StoryProgressController _storyController = StoryProgressController();
@@ -339,6 +347,115 @@ class _ProductDetailPageState extends State<ProductDetailPage>
     _connectSocket();
     _loadUserId();
     _loadJoinStatus();
+    _initGameResultSound();
+    _initTts();
+  }
+
+  // 🔊 âm thanh "tèn ten" phát khi CÓ KẾT QUẢ ở bất kỳ trò nào trong số:
+  // Chưa Từng / Thật Hay Thách / Xúc Xắc Phạt — dùng chung 1 player vì cả
+  // 3 trò đều đi qua hàm _runGameFlow() bên dưới, chỉ cần gắn 1 chỗ.
+  final AudioPlayer _gameResultPlayer =
+  AudioPlayer(playerId: 'game_result_sound');
+  bool _gameResultSoundReady = false;
+
+  // 🔊 TTS: đọc to nội dung câu "thật/thách", "chưa từng", "xúc xắc phạt"...
+  // ngay khi kết quả hiện ra, để mọi người quanh bàn nghe được mà không cần
+  // cúi xuống đọc màn hình.
+  final FlutterTts _tts = FlutterTts();
+  bool _ttsReady = false;
+
+  Future<void> _initTts() async {
+    // 🔍 Không được để _ttsReady kẹt ở false mãi mãi nếu lệnh native bị
+    // treo (ví dụ máy không có engine TTS nào) — mọi lời gọi xuống platform
+    // đều bọc timeout, và dù có gì xảy ra, cuối cùng vẫn set _ttsReady=true
+    // để _speak() ít nhất CÓ THỬ gọi speak() (nó sẽ tự im lặng nếu máy
+    // thật sự không có engine, thay vì code phía Dart tự chặn trước).
+    try {
+      // 🔍 Liệt kê engine TTS máy đang cài — nếu danh sách rỗng, máy/emulator
+      // này không có bất kỳ engine đọc giọng nào, TTS sẽ luôn câm bất kể
+      // code viết đúng hay sai.
+      final engines = await _tts.getEngines.timeout(
+        const Duration(seconds: 5),
+        onTimeout: () {
+          debugPrint('[TTS] ⏱️ getEngines() timeout — có thể máy không có engine TTS nào');
+          return [];
+        },
+      );
+      debugPrint('[TTS] Engines tìm thấy: $engines');
+
+      final available = await _tts.isLanguageAvailable('vi-VN').timeout(
+        const Duration(seconds: 5),
+        onTimeout: () {
+          debugPrint('[TTS] ⏱️ isLanguageAvailable() timeout');
+          return false;
+        },
+      );
+      debugPrint('[TTS] vi-VN available = $available');
+
+      final langResult = await _tts.setLanguage('vi-VN').timeout(
+        const Duration(seconds: 5),
+        onTimeout: () {
+          debugPrint('[TTS] ⏱️ setLanguage() timeout');
+          return null;
+        },
+      );
+      debugPrint('[TTS] setLanguage(vi-VN) -> $langResult');
+
+      await _tts.setSpeechRate(0.48);
+      await _tts.setPitch(1.0);
+      await _tts.setVolume(1.0);
+
+      _tts.setStartHandler(() => debugPrint('[TTS] ▶️ bắt đầu đọc'));
+      _tts.setCompletionHandler(() => debugPrint('[TTS] ✅ đọc xong'));
+      _tts.setCancelHandler(() => debugPrint('[TTS] ⏹️ bị huỷ'));
+      _tts.setErrorHandler((msg) => debugPrint('[TTS] ❌ lỗi engine: $msg'));
+
+      debugPrint('[TTS] ✅ init xong, sẵn sàng đọc');
+    } catch (e) {
+      debugPrint('[TTS] ❌ init lỗi: $e');
+    } finally {
+      // Luôn mở cờ ready dù bước cấu hình ngôn ngữ ở trên có trục trặc gì,
+      // để không tự chặn speak() một cách vô lý.
+      _ttsReady = true;
+    }
+  }
+
+  /// Đọc to [text]. Nếu đang đọc dở câu trước thì dừng lại rồi đọc câu mới,
+  /// tránh 2 câu chồng lên nhau khi user bấm liên tiếp.
+  Future<void> _speak(String text) async {
+    debugPrint('[TTS] 🔔 gọi _speak (ready=$_ttsReady): "$text"');
+    if (!_ttsReady || text.trim().isEmpty) return;
+    try {
+      await _tts.stop();
+      final result = await _tts.speak(text);
+      debugPrint('[TTS] speak() trả về: $result');
+    } catch (e) {
+      debugPrint('[TTS] ❌ speak lỗi: $e');
+    }
+  }
+
+  void _initGameResultSound() {
+    _gameResultPlayer.setReleaseMode(ReleaseMode.stop);
+    _gameResultPlayer.setVolume(1.0);
+    _gameResultPlayer
+        .setSource(AssetSource('sounds/win.wav'))
+        .then((_) {
+      _gameResultSoundReady = true;
+      debugPrint('[GameResultSound] ✅ đã load win.wav thành công');
+    })
+        .catchError((e) {
+      _gameResultSoundReady = false;
+      debugPrint('[GameResultSound] ❌ LOAD win.wav THẤT BẠI: $e');
+    });
+  }
+
+  void _playGameResultSound() {
+    debugPrint('[GameResultSound] 🔔 gọi phát tiếng (ready=$_gameResultSoundReady)');
+    if (!_gameResultSoundReady) return;
+    _gameResultPlayer.seek(Duration.zero);
+    _gameResultPlayer.resume().catchError((e) {
+      debugPrint('[GameResultSound] ❌ resume() lỗi: $e');
+    });
   }
 
   void _initAnimation() {
@@ -361,6 +478,8 @@ class _ProductDetailPageState extends State<ProductDetailPage>
     _channel.sink.close();
     _pulseController.dispose();
     _pageController.dispose();
+    _gameResultPlayer.dispose();
+    _tts.stop();
     for (final c in _videoMap.values) c.dispose();
     _videoMap.clear();
     VideoCompress.deleteAllCache();
@@ -889,14 +1008,97 @@ class _ProductDetailPageState extends State<ProductDetailPage>
     }
   }
 
-  Future<void> _updateAttendance(AttendanceStatus status) async {
+  // 🆕 Bán kính cho phép check-in (mét) — đứng trong phạm vi này quanh toạ
+  // độ kèo mới bấm "Đã tới" được, tránh check-in khống khi còn ở xa.
+  static const double _checkinRadiusMeters = 300;
+
+  Future<void> _checkinWithGps() async {
+    double? venueLat;
+    double? venueLng;
+
+    final meta = widget.product['meta'];
+    if (meta is Map) {
+      venueLat = double.tryParse(meta['lat']?.toString() ?? '');
+      venueLng = double.tryParse(meta['lng']?.toString() ?? '');
+    }
+    // 🆕 Fallback: một số nơi (vd "Kèo của tôi") trả 'meta_data' dạng
+    // list [{key,value}] thay vì map 'meta' đã parse sẵn — quét thêm ở
+    // đây để không báo nhầm "chưa có toạ độ" dù dữ liệu thật sự có.
+    if (venueLat == null || venueLng == null) {
+      final metaData = widget.product['meta_data'] as List<dynamic>? ?? [];
+      for (final item in metaData) {
+        if (item is Map && item['key'] == 'lat') {
+          venueLat ??= double.tryParse(item['value']?.toString() ?? '');
+        }
+        if (item is Map && item['key'] == 'lng') {
+          venueLng ??= double.tryParse(item['value']?.toString() ?? '');
+        }
+      }
+    }
+
+    if (venueLat == null || venueLng == null) {
+      _showSnack('❌ Kèo này chưa có toạ độ địa điểm nên không xác thực GPS được, báo chủ bàn cập nhật lại vị trí giúp nhé');
+      return;
+    }
+
+    setState(() => _isUpdatingAttendance = true);
+    try {
+      // ── Kiểm tra dịch vụ định vị + quyền truy cập, giống pattern đã
+      // dùng ở shop_page/near_pub ──────────────────────────────────────
+      if (!await Geolocator.isLocationServiceEnabled()) {
+        _showSnack('❌ Bạn cần bật định vị (GPS) để check-in');
+        return;
+      }
+      LocationPermission permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+      }
+      if (permission == LocationPermission.denied ||
+          permission == LocationPermission.deniedForever) {
+        _showSnack('❌ Cần cấp quyền vị trí để check-in');
+        return;
+      }
+
+      final pos = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.high,
+      ).timeout(const Duration(seconds: 12));
+
+      final distance = Geolocator.distanceBetween(
+        pos.latitude, pos.longitude, venueLat, venueLng,
+      );
+
+      if (distance > _checkinRadiusMeters) {
+        final distText = distance >= 1000
+            ? '${(distance / 1000).toStringAsFixed(1)}km'
+            : '${distance.toStringAsFixed(0)}m';
+        _showSnack('❌ Bạn đang cách địa điểm ~$distText, cần tới gần hơn ($_checkinRadiusMeters m) mới check-in được');
+        return;
+      }
+
+      // 🆕 Vẫn gửi lat/lng thật lên server để server tự verify lại (không
+      // chỉ tin phép tính khoảng cách phía client) — chốt bảo mật thật
+      // nằm ở nhau_update_attendance_status() bên PHP.
+      await _updateAttendance(AttendanceStatus.going, lat: pos.latitude, lng: pos.longitude);
+    } catch (e) {
+      _showSnack('❌ Không lấy được vị trí, thử lại: $e');
+    } finally {
+      if (mounted) setState(() => _isUpdatingAttendance = false);
+    }
+  }
+
+  Future<void> _updateAttendance(AttendanceStatus status, {double? lat, double? lng}) async {
     if (inviteId == null) return;
     setState(() => _isUpdatingAttendance = true);
     try {
       final res = await http.post(
         Uri.parse(_ApiUrls.attendanceUpdate),
         headers: await _authHeaders(),
-        body: jsonEncode({'invite_id': inviteId, 'status': status.key}),
+        body: jsonEncode({
+          'invite_id': inviteId,
+          'status': status.key,
+          if (lat != null) 'lat': lat,
+          if (lng != null) 'lng': lng,
+        }),
       );
       final data = jsonDecode(res.body) as Map<String, dynamic>;
       if (data['success'] == true) {
@@ -1144,6 +1346,31 @@ class _ProductDetailPageState extends State<ProductDetailPage>
     if (data['result'] == null) throw Exception('result = null từ server');
     return data;
   }
+
+  // ==========================================================================
+  // API — CÁC TRÒ CHƠI KHÁC (Chưa Từng / Thật Hay Thách / Xúc Xắc Phạt)
+  // ==========================================================================
+
+  Future<Map<String, dynamic>> _callGameApi(String url) async {
+    final res = await http.post(
+      Uri.parse(url),
+      headers: await _authHeaders(),
+      body: jsonEncode({'invite_id': inviteId}),
+    );
+    final data = jsonDecode(res.body) as Map<String, dynamic>;
+    if (data['success'] != true) throw Exception(data['message'] ?? 'Có lỗi xảy ra');
+    if (data['result'] == null) throw Exception('result = null từ server');
+    return Map<String, dynamic>.from(data['result'] as Map);
+  }
+
+  Future<Map<String, dynamic>> _callNeverHaveIEverApi() =>
+      _callGameApi(_ApiUrls.gameNeverHaveIEver);
+
+  Future<Map<String, dynamic>> _callTruthOrDareApi() =>
+      _callGameApi(_ApiUrls.gameTruthOrDare);
+
+  Future<Map<String, dynamic>> _callDiceRollApi() =>
+      _callGameApi(_ApiUrls.gameDiceRoll);
 
   // ==========================================================================
   // HELPERS
@@ -1822,10 +2049,26 @@ class _ProductDetailPageState extends State<ProductDetailPage>
   // ==========================================================================
 
   Widget _buildActionRow() {
-    if (!isHost && !isJoined) return const SizedBox.shrink();
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
+    final showNewsfeedBtn = widget.product['id'] != null;
+    if (!isHost && !isJoined && !showNewsfeedBtn) return const SizedBox.shrink();
+    return Wrap(
+      alignment: WrapAlignment.center,
+      spacing: 8,
+      runSpacing: 8,
       children: [
+        // 🆕 "Đã tới" là hành động chính (check-in) -> giữ nút gradient nổi
+        // bật, các nút còn lại chuyển sang dạng outline nhỏ gọn hơn để đỡ
+        // rối mắt và làm rõ đâu là hành động quan trọng nhất.
+        if (isJoined) ...[
+          _isUpdatingAttendance
+              ? _shimmerChip()
+              : _ChipButton(
+            label: 'Đã tới',
+            icon: Icons.flag,
+            onTap: _isUpdatingAttendance ? () {} : _checkinWithGps,
+            onLongPress: _showAttendancePicker,
+          ),
+        ],
         if (isHost) ...[
           _isUpdatingInviteStatus
               ? _shimmerChip()
@@ -1834,21 +2077,39 @@ class _ProductDetailPageState extends State<ProductDetailPage>
             inviteStatus == 'open' ? 'Đóng bàn' : 'Mở lại bàn',
             icon: inviteStatus == 'open' ? Icons.lock : Icons.lock_open,
             onTap: _toggleInviteStatus,
+            outlined: true,
           ),
         ],
-        if (isHost && isJoined) const SizedBox(width: 10),
         if (isJoined) ...[
-          _isUpdatingAttendance
-              ? _shimmerChip()
-              : _ChipButton(
-            label: 'Trạng thái',
-            icon: Icons.flag,
-            onTap: _showAttendancePicker,
+          _ChipButton(
+            label: 'Trò chơi',
+            icon: Icons.sports_bar_rounded,
+            onTap: _openGameMenu,
+            outlined: true,
           ),
         ],
+        // 🆕 Dẫn qua newsfeed của kèo này (video/hình đã đăng cho kèo).
+        if (showNewsfeedBtn)
+          _ChipButton(
+            label: 'Newsfeed',
+            icon: Icons.dynamic_feed_rounded,
+            outlined: true,
+            onTap: () {
+              final idRaw = widget.product['id'];
+              final pid = int.tryParse(idRaw.toString());
+              if (pid == null) return;
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (_) => NewsfeedPage(initialProductId: pid),
+                ),
+              );
+            },
+          ),
       ],
     );
   }
+
 
   // ==========================================================================
   // INFO CARD
@@ -1881,6 +2142,27 @@ class _ProductDetailPageState extends State<ProductDetailPage>
         .map((k) => (key: k, value: metaMap[k]!, def: fieldDefs[k]!))
         .toList();
 
+    // 🆕 Giờ / Địa điểm / Liên hệ là 3 thông tin quan trọng nhất khi xem 1
+    // kèo -> tách riêng ra thành khối nổi bật (icon lớn, nền đậm hơn) thay
+    // vì để lẫn trong grid/row chung chung như các field khác.
+    const highlightOrder = ['time', 'address', 'phone', 'contact'];
+    final highlightMeta = highlightOrder
+        .where((k) => metaMap.containsKey(k) && metaMap[k]!.isNotEmpty)
+    // phone/contact chỉ lấy field đầu tiên có giá trị, tránh trùng "Liên hệ"
+        .fold<List<({String key, String value, (IconData, String) def})>>(
+      [],
+          (acc, k) {
+        if ((k == 'phone' || k == 'contact') &&
+            acc.any((e) => e.key == 'phone' || e.key == 'contact')) {
+          return acc;
+        }
+        acc.add((key: k, value: metaMap[k]!, def: fieldDefs[k]!));
+        return acc;
+      },
+    );
+    final highlightKeys = highlightMeta.map((e) => e.key).toSet();
+    validMeta.removeWhere((m) => highlightKeys.contains(m.key));
+
     // ── Số người tham gia ─────────────────────────────────────────────────
     final hasCount = maxPeople > 0;
 
@@ -1891,7 +2173,7 @@ class _ProductDetailPageState extends State<ProductDetailPage>
         .where((n) => n.isNotEmpty)
         .toList();
 
-    final isEmpty = validMeta.isEmpty && !hasCount && catNames.isEmpty && description.isEmpty;
+    final isEmpty = validMeta.isEmpty && highlightMeta.isEmpty && !hasCount && catNames.isEmpty && description.isEmpty;
     if (isEmpty) return const SizedBox.shrink();
 
     // ── Tách thành 2 nhóm: ngắn (1 dòng) và dài (multi-line) ─────────────
@@ -1928,6 +2210,23 @@ class _ProductDetailPageState extends State<ProductDetailPage>
           ),
 
           const SizedBox(height: 14),
+
+          // ── Giờ / Địa điểm / Liên hệ — nổi bật lên đầu ──────────────────
+          if (highlightMeta.isNotEmpty) ...[
+            Column(
+              children: highlightMeta
+                  .map((m) => Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: _HighlightInfoRow(
+                  icon: m.def.$1,
+                  label: m.def.$2,
+                  value: m.value,
+                ),
+              ))
+                  .toList(),
+            ),
+            const SizedBox(height: 4),
+          ],
 
           // ── Số người tham gia ──────────────────────────────────────────
           if (hasCount) ...[
@@ -2136,41 +2435,22 @@ class _ProductDetailPageState extends State<ProductDetailPage>
   void _showAttendancePicker() {
     showModalBottomSheet(
       context: context,
-      backgroundColor: const Color(0xEE111827),
-      shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
-      builder: (_) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const SizedBox(height: 8),
-            Container(
-              width: 36,
-              height: 4,
-              decoration: BoxDecoration(
-                  color: Colors.white24,
-                  borderRadius: BorderRadius.circular(2)),
-            ),
-            const SizedBox(height: 16),
-            const Text('Trạng thái tham dự',
-                style: TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 16)),
-            const SizedBox(height: 8),
-            ...AttendanceStatus.values.map((s) => ListTile(
-              leading:
-              Icon(Icons.circle, color: s.color, size: 12),
-              title: Text(s.shortLabel,
-                  style: const TextStyle(color: Colors.white)),
-              onTap: () async {
-                Navigator.pop(context);
-                await _updateAttendance(s);
-              },
-            )),
-            const SizedBox(height: 8),
-          ],
-        ),
+      backgroundColor: Colors.transparent,
+      builder: (_) => _GradientBottomSheet(
+        title: '🚩 Trạng thái tham dự',
+        children: AttendanceStatus.values.map((s) => ListTile(
+          leading: Icon(Icons.circle, color: s.color, size: 12),
+          title: Text(s.shortLabel,
+              style: const TextStyle(color: Colors.white)),
+          onTap: () async {
+            Navigator.pop(context);
+            if (s == AttendanceStatus.going) {
+              await _checkinWithGps();
+            } else {
+              await _updateAttendance(s);
+            }
+          },
+        )).toList(),
       ),
     );
   }
@@ -2205,61 +2485,152 @@ class _ProductDetailPageState extends State<ProductDetailPage>
     );
   }
 
+  void _openGameMenu() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _GradientBottomSheet(
+        title: '🎮 Trò chơi bàn nhậu',
+        children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Row(
+              children: [
+                Expanded(
+                  child: _GameGridTile(
+                    icon: Icons.casino_rounded,
+                    title: 'Vòng quay nhậu',
+                    color: Colors.orangeAccent,
+                    onTap: () {
+                      Navigator.pop(context);
+                      _openSpinDialog();
+                    },
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: _GameGridTile(
+                    icon: Icons.local_bar_rounded,
+                    title: 'Chưa Từng',
+                    color: Colors.lightBlueAccent,
+                    onTap: () {
+                      Navigator.pop(context);
+                      _openNeverHaveIEverDialog();
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Row(
+              children: [
+                Expanded(
+                  child: _GameGridTile(
+                    icon: Icons.record_voice_over_rounded,
+                    title: 'Thật Hay Thách',
+                    color: Colors.purpleAccent,
+                    onTap: () {
+                      Navigator.pop(context);
+                      _openTruthOrDareDialog();
+                    },
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: _GameGridTile(
+                    icon: Icons.casino,
+                    title: 'Xúc Xắc Phạt',
+                    color: Colors.redAccent,
+                    onTap: () {
+                      Navigator.pop(context);
+                      _openDiceRollDialog();
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   void _openSpinDialog() {
     final wheelKey = GlobalKey<SpinWheelState>();
     showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (_) => Dialog(
-        backgroundColor: Colors.transparent,
-        child: _GradientContainer(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Text(
-                '🎡 Vòng quay nhậu',
-                style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 16),
-              SpinWheel(
-                key: wheelKey,
-                items: const [
-                  'Uống 1 ly',
-                  'Uống 2 ly',
-                  'Chỉ định người khác',
-                  'Cả bàn uống',
-                ],
-                onFinish: (index) {
-                  Navigator.pop(context);
-                  final result = _spinResult;
-                  _showSpinResult(
-                    result['user_name']?.toString() ?? '',
-                    result['action']?.toString() ?? '',
-                  );
-                },
-              ),
-              const SizedBox(height: 16),
-              _ActionButton(
-                label: '🎲 Quay ngay',
-                color: _AppColors.accentOrange,
-                onTap: () async {
-                  if (wheelKey.currentState?.isSpinning == true) return;
-                  wheelKey.currentState?.spinTo(0);
-                  try {
-                    final data = await _callSpinWheelApi();
-                    setState(() => _spinResult =
-                    Map<String, dynamic>.from(data['result'] as Map));
-                    wheelKey.currentState
-                        ?.spinTo(_spinResult['index'] as int);
-                  } catch (e) {
-                    _showSnack('❌ $e');
-                  }
-                },
-              ),
-            ],
+      builder: (_) => StatefulBuilder(
+        builder: (context, setDialogState) => Dialog(
+          backgroundColor: Colors.transparent,
+          child: _GradientContainer(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text(
+                  '🎡 Vòng quay nhậu',
+                  style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 16),
+                SpinWheel(
+                  key: wheelKey,
+                  items: const [
+                    'Uống 1 ly',
+                    'Uống 2 ly',
+                    'Chỉ định người khác',
+                    'Cả bàn uống',
+                  ],
+                  onFinish: (index) {
+                    Navigator.pop(context);
+                    final result = _spinResult;
+                    _showSpinResult(
+                      result['user_name']?.toString() ?? '',
+                      result['action']?.toString() ?? '',
+                    );
+                  },
+                ),
+                const SizedBox(height: 16),
+                _ActionButton(
+                  label: _isSpinningApi ? 'Đang quay...' : '🎲 Quay ngay',
+                  color: _AppColors.accentOrange,
+                  // ✅ Disable nút trong lúc chờ API để tránh bấm nhiều
+                  // lần -> gây gọi spinTo() chồng chéo nhau (nguồn gốc
+                  // của lỗi "quay 1 đằng báo 1 nẻo" trước đây).
+                  onTap: _isSpinningApi
+                      ? null
+                      : () async {
+                    if (wheelKey.currentState?.isSpinning == true) return;
+                    // ✅ FIX: trước đây gọi spinTo(0) "quay mù" ngay lập
+                    // tức (trước khi biết kết quả thật), rồi sau khi API
+                    // trả về mới gọi spinTo(index) lần 2 tới vị trí
+                    // thật. Vì SpinWheel không hủy/ghi đè được animation
+                    // đang chạy dở của lần quay đầu, bánh xe có thể dừng
+                    // lại ở 1 ô khác với kết quả thật được thông báo ->
+                    // "quay 1 đằng báo 1 nẻo". Giờ: gọi API lấy kết quả
+                    // thật TRƯỚC, rồi chỉ spinTo() ĐÚNG 1 LẦN DUY NHẤT
+                    // tới index thật.
+                    setDialogState(() => _isSpinningApi = true);
+                    try {
+                      final data = await _callSpinWheelApi();
+                      setState(() => _spinResult =
+                      Map<String, dynamic>.from(data['result'] as Map));
+                      wheelKey.currentState
+                          ?.spinTo(_spinResult['index'] as int);
+                    } catch (e) {
+                      _showSnack('❌ $e');
+                    } finally {
+                      setDialogState(() => _isSpinningApi = false);
+                    }
+                  },
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -2267,6 +2638,7 @@ class _ProductDetailPageState extends State<ProductDetailPage>
   }
 
   void _showSpinResult(String user, String action) {
+    _speak('$user, $action');
     showDialog(
       context: context,
       barrierDismissible: false,
@@ -2315,9 +2687,252 @@ class _ProductDetailPageState extends State<ProductDetailPage>
     );
   }
 
-  // ==========================================================================
-  // SHIMMER HELPERS
-  // ==========================================================================
+// ==========================================================================
+// DIALOG KẾT QUẢ CHUNG CHO CÁC TRÒ MỚI
+// ==========================================================================
+
+  /// Chạy [call], hiện loading trong lúc chờ, rồi hiện kết quả qua
+  /// [buildResult]. Nếu lỗi thì đóng loading + hiện snack, không crash.
+  Future<void> _runGameFlow({
+    required Future<Map<String, dynamic>> Function() call,
+    required Widget Function(Map<String, dynamic> result) buildResult,
+    // 🔊 Câu sẽ được đọc to (TTS) ngay khi kết quả hiện ra. Trả về chuỗi
+    // rỗng/null nếu không muốn đọc.
+    String? Function(Map<String, dynamic> result)? speechText,
+  }) async {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => Dialog(
+        backgroundColor: Colors.transparent,
+        child: _GradientContainer(child: _gameLoadingShimmer()),
+      ),
+    );
+    try {
+      final result = await call();
+      if (!mounted) return;
+      Navigator.pop(context); // đóng loading
+      _playGameResultSound();
+      final text = speechText?.call(result);
+      if (text != null && text.trim().isNotEmpty) {
+        _speak(text);
+      }
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => Dialog(
+          backgroundColor: Colors.transparent,
+          child: _GradientContainer(child: buildResult(result)),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      Navigator.pop(context); // đóng loading
+      _showSnack('❌ $e');
+    }
+  }
+
+  /// Khung "xương" (shimmer) hiện trong lúc chờ API trả kết quả trò chơi —
+  /// mô phỏng đúng bố cục của [_gameResultShell] (icon tròn, tiêu đề, khối
+  /// nội dung, nút) để lúc kết quả thật hiện ra không bị giật/nhảy hình.
+  Widget _gameLoadingShimmer() {
+    return shimmer.Shimmer.fromColors(
+      baseColor: Colors.white.withOpacity(0.08),
+      highlightColor: Colors.white.withOpacity(0.25),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const CircleAvatar(radius: 26, backgroundColor: Colors.white),
+          const SizedBox(height: 12),
+          Container(
+            width: 90,
+            height: 12,
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(6),
+            ),
+          ),
+          const SizedBox(height: 16),
+          Container(
+            width: 220,
+            height: 54,
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(12),
+            ),
+          ),
+          const SizedBox(height: 10),
+          Container(
+            width: 160,
+            height: 14,
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(6),
+            ),
+          ),
+          const SizedBox(height: 20),
+          Container(
+            width: 220,
+            height: 44,
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(12),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _gameResultShell({
+    required IconData icon,
+    required String heading,
+    required List<Widget> children,
+  }) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, color: Colors.amber, size: 52),
+        const SizedBox(height: 10),
+        Text(heading,
+            style: const TextStyle(
+                color: Colors.white60, fontSize: 13, letterSpacing: 1.5)),
+        const SizedBox(height: 12),
+        ...children,
+        const SizedBox(height: 20),
+        _ActionButton(
+          label: 'Đồng ý',
+          color: _AppColors.accentOrange,
+          onTap: () => Navigator.pop(context),
+        ),
+      ],
+    );
+  }
+
+  void _openNeverHaveIEverDialog() {
+    _runGameFlow(
+      call: _callNeverHaveIEverApi,
+      speechText: (result) => result['statement']?.toString(),
+      buildResult: (result) => _gameResultShell(
+        icon: Icons.local_bar_rounded,
+        heading: 'CHƯA TỪNG',
+        children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.12),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Text(
+              result['statement']?.toString() ?? '',
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                  fontSize: 17,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.white),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _openTruthOrDareDialog() {
+    _runGameFlow(
+      call: _callTruthOrDareApi,
+      speechText: (result) {
+        final name = result['user_name']?.toString() ?? '';
+        final isDare = result['mode']?.toString() == 'dare';
+        final content = result['content']?.toString() ?? '';
+        final modeLabel = isDare ? 'thách' : 'thật';
+        return '$name, $modeLabel: $content';
+      },
+      buildResult: (result) {
+        final isDare = result['mode']?.toString() == 'dare';
+        return _gameResultShell(
+          icon: Icons.record_voice_over_rounded,
+          heading: 'THẬT HAY THÁCH',
+          children: [
+            Text(result['user_name']?.toString() ?? '',
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                    fontSize: 22,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.white)),
+            const SizedBox(height: 8),
+            Container(
+              padding:
+              const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(
+                color: (isDare ? Colors.redAccent : Colors.blueAccent)
+                    .withOpacity(0.25),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(isDare ? 'THÁCH' : 'THẬT',
+                  style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white)),
+            ),
+            const SizedBox(height: 10),
+            Container(
+              padding:
+              const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.12),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Text(result['content']?.toString() ?? '',
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(fontSize: 16, color: Colors.white)),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  void _openDiceRollDialog() {
+    _runGameFlow(
+      call: _callDiceRollApi,
+      speechText: (result) {
+        final name = result['user_name']?.toString() ?? '';
+        final dice = result['dice']?.toString() ?? '';
+        final penalty = result['penalty']?.toString() ?? '';
+        return '$name, xúc xắc ra $dice: $penalty';
+      },
+      buildResult: (result) => _gameResultShell(
+        icon: Icons.casino,
+        heading: 'XÚC XẮC PHẠT',
+        children: [
+          Text(result['user_name']?.toString() ?? '',
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.white)),
+          const SizedBox(height: 8),
+          Text('🎲 ${result['dice'] ?? ''}',
+              style: const TextStyle(fontSize: 32, color: Colors.white)),
+          const SizedBox(height: 10),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.12),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Text(result['penalty']?.toString() ?? '',
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 16, color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+  }
+
+// ==========================================================================
+// SHIMMER HELPERS
+// ==========================================================================
 
   Widget _shimmerBox({double height = 120}) =>
       shimmer.Shimmer.fromColors(
@@ -2342,7 +2957,7 @@ class _ProductDetailPageState extends State<ProductDetailPage>
         ),
       );
 
-  Widget _shimmerChip() => _shimmerButton(w: 110, h: 36);
+  Widget _shimmerChip() => _shimmerButton(w: 92, h: 32);
 
   Widget _shimmerParticipants() => Row(
     children: List.generate(
@@ -2718,41 +3333,66 @@ class _ChipButton extends StatelessWidget {
   final String label;
   final IconData icon;
   final VoidCallback onTap;
+  final VoidCallback? onLongPress;
+  final bool outlined;
+  final Color? color;
 
-  const _ChipButton(
-      {required this.label, required this.icon, required this.onTap});
+  const _ChipButton({
+    required this.label,
+    required this.icon,
+    required this.onTap,
+    this.onLongPress,
+    this.outlined = false,
+    this.color,
+  });
 
   @override
-  Widget build(BuildContext context) => GestureDetector(
-    onTap: onTap,
-    child: Container(
-      padding:
-      const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-      decoration: BoxDecoration(
-        gradient: const LinearGradient(
-            colors: [Color(0xFFFF7F50), Color(0xFFFF3D00)]),
-        borderRadius: BorderRadius.circular(12),
-        boxShadow: const [
-          BoxShadow(
-              color: Colors.black26,
-              blurRadius: 4,
-              offset: Offset(0, 3))
-        ],
+  Widget build(BuildContext context) {
+    // 🆕 Nút phụ (outlined) mặc định dùng tông trắng trung tính, hợp với
+    // nền gradient navy → cam san hô sẵn có của app, thay vì màu Material
+    // rời rạc (tím/vàng/xanh dương) không cùng bảng màu thương hiệu.
+    final accent = color ?? Colors.white;
+
+    return GestureDetector(
+      onTap: onTap,
+      onLongPress: onLongPress,
+      child: Container(
+        padding:
+        const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+        decoration: outlined
+            ? BoxDecoration(
+          color: Colors.white.withOpacity(0.10),
+          borderRadius: BorderRadius.circular(11),
+          border: Border.all(color: Colors.white.withOpacity(0.35)),
+        )
+            : BoxDecoration(
+          gradient: const LinearGradient(
+              colors: [Color(0xFFFF7F50), Color(0xFFFF3D00)]),
+          borderRadius: BorderRadius.circular(11),
+          boxShadow: const [
+            BoxShadow(
+                color: Colors.black26,
+                blurRadius: 4,
+                offset: Offset(0, 3))
+          ],
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon,
+                size: 14,
+                color: outlined ? accent : Colors.white),
+            const SizedBox(width: 5),
+            Text(label,
+                style: TextStyle(
+                    color: outlined ? accent : Colors.white,
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w600)),
+          ],
+        ),
       ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 16, color: Colors.white),
-          const SizedBox(width: 6),
-          Text(label,
-              style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w500)),
-        ],
-      ),
-    ),
-  );
+    );
+  }
 }
 
 class _TinyButton extends StatelessWidget {
@@ -2850,6 +3490,64 @@ class _MediaPickerTile extends StatelessWidget {
             ),
             const Icon(Icons.arrow_forward_ios,
                 color: Colors.white38, size: 14),
+          ],
+        ),
+      ),
+    ),
+  );
+}
+
+class _GameGridTile extends StatelessWidget {
+  final IconData icon;
+  final String title;
+  final Color color;
+  final VoidCallback onTap;
+
+  const _GameGridTile({
+    required this.icon,
+    required this.title,
+    required this.color,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) => Material(
+    color: Colors.transparent,
+    child: InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(18),
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 8),
+        decoration: BoxDecoration(
+          color: Colors.white.withOpacity(0.08),
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: color.withOpacity(0.35)),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 48,
+              height: 48,
+              decoration: BoxDecoration(
+                color: color.withOpacity(0.18),
+                shape: BoxShape.circle,
+              ),
+              child: Icon(icon, color: color, size: 24),
+            ),
+            const SizedBox(height: 10),
+            Text(
+              title,
+              textAlign: TextAlign.center,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                height: 1.2,
+              ),
+            ),
           ],
         ),
       ),
@@ -3404,6 +4102,76 @@ class _InfoCell extends StatelessWidget {
 }
 
 /// Row thông tin dài (address, note, requirements)
+/// Hàng thông tin nổi bật (Giờ / Địa điểm / Liên hệ) — icon to hơn, nền
+/// đậm màu cam hơn hẳn _InfoRow thường để bắt mắt ngay khi lướt xuống.
+class _HighlightInfoRow extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String value;
+  const _HighlightInfoRow({
+    required this.icon,
+    required this.label,
+    required this.value,
+  });
+
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+    decoration: BoxDecoration(
+      gradient: LinearGradient(
+        colors: [
+          _AppColors.accentOrange.withOpacity(0.22),
+          _AppColors.accentOrange.withOpacity(0.08),
+        ],
+        begin: Alignment.centerLeft,
+        end: Alignment.centerRight,
+      ),
+      borderRadius: BorderRadius.circular(14),
+      border: Border.all(color: _AppColors.accentOrange.withOpacity(0.35)),
+    ),
+    child: Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Container(
+          padding: const EdgeInsets.all(9),
+          decoration: BoxDecoration(
+            color: _AppColors.accentOrange.withOpacity(0.25),
+            borderRadius: BorderRadius.circular(11),
+          ),
+          child: Icon(icon, color: _AppColors.accentOrange, size: 19),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                label,
+                style: TextStyle(
+                  color: Colors.white.withOpacity(0.65),
+                  fontSize: 11.5,
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: 0.3,
+                ),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                value,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 15,
+                  fontWeight: FontWeight.bold,
+                  height: 1.3,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
 class _InfoRow extends StatelessWidget {
   final IconData icon;
   final String label;

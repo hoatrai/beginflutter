@@ -1670,7 +1670,7 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
         // 🚀 CHỈ lấy field cần dùng ở shop page thay vì cả schema WC
         // (description, attributes, variations, links...) → JSON nhẹ
         // hơn đáng kể, parse nhanh hơn, tốn ít băng thông hơn.
-            "&_fields=id,name,price,images,meta_data,categories,date_created,party_media_image_url,party_media_video_url"
+            "&_fields=id,name,price,images,meta_data,categories,date_created,party_media_image_url,party_media_video_url,description"
             "&consumer_key=ck_3809ad31dd47ca7d10573e35ccdf746494b305a9"
             "&consumer_secret=cs_a49b903ddc7972646359f360d79343cd1e33b6f8",
       );

@@ -486,7 +486,12 @@ class _MyKeoPageState extends State<MyKeoPage> {
                 'id': p['product_id'],
                 'name': p['name'] ?? '',
                 'price': p['price'] ?? '',
+                'description': p['description'] ?? '',
                 'images': normalizeImages(p['images']),
+                'meta': {
+                  'lat': p['lat'],
+                  'lng': p['lng'],
+                },
                 'meta_data': [
                   {
                     'key': 'slots',

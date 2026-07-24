@@ -78,6 +78,15 @@ dependencies:
   # nhất tương thích, tránh dùng nhầm bản cũ.
   flutter_callkit_incoming: ^2.0.0
 
+  # 🆕 Phát tiếng "tách" khi quay vòng quay nhậu (pages/spin_wheel.dart).
+  # Dùng PlayerMode.lowLatency (SoundPool trên Android) để phát lặp lại
+  # rất nhanh, tin cậy hơn SystemSound (không phụ thuộc "Touch sounds").
+  audioplayers: ^6.0.0
+
+  # 🆕 Đọc to (text-to-speech) kết quả các trò chơi: Thật hay thách, Chưa
+  # từng, Xúc xắc phạt, Vòng quay nhậu (pages/product_detail_page.dart).
+  flutter_tts: ^4.0.2
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
@@ -96,3 +105,5 @@ flutter:
   assets:
     - assets/images/background.png
     - assets/images/logo.png
+    - assets/sounds/tick.wav
+    - assets/sounds/win.wav
