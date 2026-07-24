@@ -17,6 +17,12 @@ dependencies:
   visibility_detector: ^0.4.0+2
   share_plus: ^11.1.0
 
+  # 🆕 Cho tính năng "Thiệp mời kèo" (pages/invite_card_page.dart):
+  # qr_flutter vẽ QR code thuần Dart, path_provider lấy thư mục tạm để
+  # ghi ảnh PNG của thiệp trước khi share/lưu.
+  qr_flutter: ^4.1.0
+  path_provider: ^2.1.4
+
   # Các thư viện hiện tại
   http: ^0.13.6
   flutter_html: ^3.0.0-beta.2

@@ -23,6 +23,37 @@ class _RegisterPageState extends State<RegisterPage> {
   String? _errorMessage;
   String? _successMessage;
 
+  // 🆕 AGE-GATE: ngày sinh bắt buộc, app xoay quanh nhậu/rượu bia nên
+  // phải xác minh tuổi trước khi tạo tài khoản (yêu cầu Apple/Google).
+  DateTime? _dateOfBirth;
+
+  String _formatDob(DateTime d) {
+    final mm = d.month.toString().padLeft(2, '0');
+    final dd = d.day.toString().padLeft(2, '0');
+    return "${d.year}-$mm-$dd";
+  }
+
+  String _displayDob(DateTime d) {
+    final mm = d.month.toString().padLeft(2, '0');
+    final dd = d.day.toString().padLeft(2, '0');
+    return "$dd/$mm/${d.year}";
+  }
+
+  Future<void> _pickDateOfBirth() async {
+    final now = DateTime.now();
+    final initial = DateTime(now.year - 18, now.month, now.day);
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _dateOfBirth ?? initial,
+      firstDate: DateTime(now.year - 100),
+      lastDate: now, // không cho chọn ngày tương lai
+      helpText: "Chọn ngày sinh",
+    );
+    if (picked != null) {
+      setState(() => _dateOfBirth = picked);
+    }
+  }
+
   Future<void> _register() async {
     final username = _usernameController.text.trim();
     final email = _emailController.text.trim();
@@ -36,6 +67,18 @@ class _RegisterPageState extends State<RegisterPage> {
 
     if (password != confirm) {
       setState(() => _errorMessage = "⚠️ Mật khẩu xác nhận không khớp");
+      return;
+    }
+
+    // 🆕 AGE-GATE
+    if (_dateOfBirth == null) {
+      setState(() => _errorMessage = "⚠️ Vui lòng chọn ngày sinh");
+      return;
+    }
+
+    final age = DateTime.now().difference(_dateOfBirth!).inDays / 365.25;
+    if (age < 18) {
+      setState(() => _errorMessage = "🔞 Ứng dụng chỉ dành cho người từ 18 tuổi trở lên.");
       return;
     }
 
@@ -54,6 +97,7 @@ class _RegisterPageState extends State<RegisterPage> {
         "username": username,
         "email": email,
         "password": password,
+        "date_of_birth": _formatDob(_dateOfBirth!),
       }),
     );
 
@@ -75,7 +119,13 @@ class _RegisterPageState extends State<RegisterPage> {
       String msg = "❌ Lỗi đăng ký. Vui lòng thử lại.";
       try {
         final data = jsonDecode(response.body);
-        msg = data["message"] ?? msg;
+        // 🆕 error_code == 'underage' -> hiện rõ lý do bị từ chối thay vì
+        // thông báo lỗi chung chung, để user hiểu ngay không phải do nhập sai.
+        if (data["error_code"] == "underage") {
+          msg = "🔞 " + (data["message"] ?? "Ứng dụng chỉ dành cho người từ 18 tuổi trở lên.");
+        } else {
+          msg = data["message"] ?? msg;
+        }
       } catch (_) {}
       setState(() {
         _errorMessage = msg;
@@ -138,6 +188,32 @@ class _RegisterPageState extends State<RegisterPage> {
                       filled: true,
                       fillColor: Colors.white24,
                       border: OutlineInputBorder(),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  // 🆕 AGE-GATE: chọn ngày sinh, bắt buộc
+                  GestureDetector(
+                    onTap: _pickDateOfBirth,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 16),
+                      decoration: BoxDecoration(
+                        color: Colors.white24,
+                        border: Border.all(color: Colors.white54),
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.cake_outlined, color: Colors.white70, size: 20),
+                          const SizedBox(width: 10),
+                          Text(
+                            _dateOfBirth == null
+                                ? "Ngày sinh (bắt buộc, từ 18 tuổi)"
+                                : "Ngày sinh: ${_displayDob(_dateOfBirth!)}",
+                            style: TextStyle(
+                              color: _dateOfBirth == null ? Colors.white70 : Colors.white,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                   const SizedBox(height: 16),

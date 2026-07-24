@@ -10,6 +10,10 @@ import 'package:shimmer/shimmer.dart' as shimmer;
 import '../config/app_config.dart';
 import 'forgot_password_page.dart';
 import '../services/admin_activity_service.dart';
+import '../services/app_globals.dart';
+import 'set_dob_page.dart';
+import 'set_password_page.dart';
+import 'age_restricted_page.dart';
 
 
 
@@ -28,6 +32,52 @@ class _LoginPageState extends State<LoginPage> {
   bool _loading = false;
   bool _showPassword = false;
   String? _errorMessage;
+
+  // 🆕 AGE-GATE: dùng chung cho cả đăng nhập mật khẩu lẫn vân tay/Face ID.
+  // Trước đây 2 luồng này push thẳng MainPage sau khi có JWT, bỏ qua hẳn
+  // bước check must_set_dob/age_restricted (chỉ Splash mới check) — nghĩa
+  // là 1 tài khoản đã bị đánh dấu age_restricted vẫn login lại được nếu
+  // gõ tay mật khẩu hoặc dùng vân tay. Gọi /me ở đây để chặn đúng chỗ.
+  Future<void> _navigateAfterLogin() async {
+    if (!mounted) return;
+
+    final response = await fetchMeSafe();
+    final me = response.data;
+
+    if (!mounted) return;
+
+    if (response.result == MeResult.success && me != null) {
+      if (me['age_restricted'] == true) {
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (_) => const AgeRestrictedPage()),
+        );
+        return;
+      }
+      if (me['must_set_dob'] == true) {
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (_) => const SetDobPage()),
+        );
+        return;
+      }
+      if (me['must_set_password'] == true) {
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (_) => const SetPasswordPage()),
+        );
+        return;
+      }
+    }
+
+    // Lỗi mạng tạm thời hoặc thiếu field -> vẫn cho vào MainPage như cũ,
+    // để không chặn nhầm user hợp lệ chỉ vì /me lag; Splash lần mở app
+    // kế tiếp sẽ check lại đầy đủ.
+    Navigator.pushReplacement(
+      context,
+      MaterialPageRoute(builder: (_) => const MainPage()),
+    );
+  }
 
 
   Future<void> sendFcmTokenAfterLogin(int userId) async {
@@ -127,10 +177,7 @@ class _LoginPageState extends State<LoginPage> {
 
         if (!mounted) return;
         AdminActivityService().connect(); // không cần await
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(builder: (_) => const MainPage()),
-        );
+        await _navigateAfterLogin();
       }else {
         setState(() {
           _errorMessage = "❌ Sai tên đăng nhập hoặc mật khẩu!";
@@ -209,10 +256,7 @@ class _LoginPageState extends State<LoginPage> {
 
       if (!mounted) return;
       AdminActivityService().connect(); // không cần await
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(builder: (_) => const MainPage()),
-      );
+      await _navigateAfterLogin();
     } catch (e) {
       setState(() {
         _errorMessage = "⚠️ Lỗi xác thực: $e";

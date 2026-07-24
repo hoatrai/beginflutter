@@ -6,6 +6,8 @@ import '../app_globals.dart';
 import 'login_page.dart';
 import '../main.dart';
 import 'set_password_page.dart';
+import 'set_dob_page.dart';
+import 'age_restricted_page.dart';
 import 'package:shimmer/shimmer.dart' as shimmer;
 import '../config/app_config.dart';
 import '../services/admin_activity_service.dart';
@@ -33,6 +35,21 @@ class _SplashPageState extends State<SplashPage> {
     );
   }
 
+  // 🆕 AGE-GATE
+  void _goSetDob() {
+    Navigator.pushReplacement(
+      context,
+      MaterialPageRoute(builder: (_) => const SetDobPage()),
+    );
+  }
+
+  void _goAgeRestricted() {
+    Navigator.pushReplacement(
+      context,
+      MaterialPageRoute(builder: (_) => const AgeRestrictedPage()),
+    );
+  }
+
   Future<void> _init() async {
     if (mounted) {
       setState(() => _showRetry = false);
@@ -50,6 +67,19 @@ class _SplashPageState extends State<SplashPage> {
           // ✅ LƯU LẠI USER STATE (RẤT QUAN TRỌNG)
           await StorageHelper.write("user_id", me['id'].toString());
           await StorageHelper.write("user_data", jsonEncode(me));
+
+          // 🆕 AGE-GATE: kiểm tra TRƯỚC must_set_password, vì nếu tài khoản
+          // đã bị đánh dấu age_restricted thì không được đi tiếp bất kỳ
+          // luồng nào khác (kể cả set-password).
+          if (me['age_restricted'] == true) {
+            _goAgeRestricted();
+            return;
+          }
+
+          if (me['must_set_dob'] == true) {
+            _goSetDob();
+            return;
+          }
 
           if (me['must_set_password'] == true) {
             _goSetPassword();

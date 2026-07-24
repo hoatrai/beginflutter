@@ -20,6 +20,7 @@ import 'newsfeed_page.dart';
 import 'user_info_page.dart';
 import 'my_keo_page.dart';
 import 'create_invite_page.dart';
+import 'invite_card_page.dart';
 import '../main.dart' show unreadNotiVN, activeTabIndexVN;
 import 'notification_page.dart';
 import 'notification_store.dart';
@@ -3109,6 +3110,11 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
     return 99;
   }
 
+  /// ⚠️ Không còn được gọi trực tiếp từ nút "Chia sẻ" (đã chuyển sang
+  /// [_openInviteCard] để share thiệp ảnh kèm QR đẹp hơn). Giữ lại hàm này
+  /// làm fallback share text nhẹ (vd cho nơi nào chỉ cần share link nhanh,
+  /// không cần dựng ảnh) — có thể gọi lại khi cần.
+  ///
   /// 🔗 Chia sẻ 1 kèo ra ngoài app (Zalo, Messenger, SMS, Facebook...) qua
   /// share sheet của hệ điều hành (share_plus). Vì app hiện chưa có deep
   /// link mở thẳng đúng kèo cho người CHƯA cài app (chỉ có trang cài app
@@ -3179,6 +3185,16 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
         );
       }
     }
+  }
+
+  /// 🎟️ Mở trang "Thiệp mời kèo" — thiệp ảnh đẹp kèm QR code, thay cho
+  /// share text trơn của [_shareKeo]. Đây là growth loop chủ động: thiệp
+  /// càng đẹp/dễ share thì càng kéo được nhiều người ngoài app quét mã vào.
+  void _openInviteCard(Map<String, dynamic> product) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => InviteCardPage(product: product)),
+    );
   }
 
   Future<void> _confirmDelete(BuildContext context, int productId) async {
@@ -5240,7 +5256,7 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
                                                 Tooltip(
                                                   message: "Chia se keo nay",
                                                   child: GestureDetector(
-                                                    onTap: () => _shareKeo(product),
+                                                    onTap: () => _openInviteCard(product),
                                                     child: Container(
                                                       width: 32,
                                                       height: 32,
