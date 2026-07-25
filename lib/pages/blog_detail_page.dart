@@ -11,7 +11,7 @@ class BlogDetailPage extends StatelessWidget {
       appBar: AppBar(
           title:
           Text(post["title"]["rendered"], style: const TextStyle(color: Colors.white)),
-          backgroundColor: Colors.blue),
+          backgroundColor: const Color(0xFF0D47A1)),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
         child: Html(data: post["content"]["rendered"]),

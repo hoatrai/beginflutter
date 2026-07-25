@@ -9,6 +9,7 @@ import 'dart:math';
 
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/foundation.dart';
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter_html/flutter_html.dart';
 import 'package:geolocator/geolocator.dart';
@@ -37,8 +38,8 @@ import '../app_globals.dart';
 // =============================================================================
 
 abstract class _AppColors {
-  static const primaryBlue   = Color(0xFF1E3A8A);
-  static const accentOrange  = Color(0xFFFF7F50);
+  static const primaryBlue   = Color(0xFF0D47A1);
+  static const accentOrange  = Color(0xFFF57C00);
   static const surface       = Color(0x12FFFFFF);
   static const border        = Color(0x14FFFFFF);
 }
@@ -874,7 +875,7 @@ class _ProductDetailPageState extends State<ProductDetailPage>
             padding: const EdgeInsets.all(24),
             decoration: BoxDecoration(
               gradient: const LinearGradient(
-                colors: [Color(0xFF1E3A8A), Color(0xFF2D1B69)],
+                colors: [Color(0xFF0D47A1), Color(0xFF2D1B69)],
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
               ),
@@ -1847,19 +1848,68 @@ class _ProductDetailPageState extends State<ProductDetailPage>
                   fontWeight: FontWeight.bold,
                 ),
               ),
-              if (isHost || isJoined)
-                GestureDetector(
-                  onTap: _showMediaPicker,
-                  child: Container(
-                    padding: const EdgeInsets.all(6),
-                    decoration: BoxDecoration(
-                      color: Colors.orangeAccent.withOpacity(0.15),
-                      borderRadius: BorderRadius.circular(10),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // 🆕 Xem newsfeed (ảnh/video) đã đăng cho kèo này —
+                  // đặt cạnh khu vực media vì đây chính là nơi liên quan
+                  // trực tiếp, thay vì trộn chung với các nút hành động
+                  // đổi trạng thái (Đã tới / Đóng bàn / Trò chơi).
+                  if (widget.product['id'] != null)
+                    GestureDetector(
+                      onTap: () {
+                        final idRaw = widget.product['id'];
+                        final pid = int.tryParse(idRaw.toString());
+                        if (pid == null) return;
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) =>
+                                NewsfeedPage(initialProductId: pid),
+                          ),
+                        );
+                      },
+                      child: Container(
+                        margin: const EdgeInsets.only(right: 8),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 10, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: Colors.orangeAccent.withOpacity(0.15),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: const Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.dynamic_feed_rounded,
+                                color: Colors.orangeAccent, size: 16),
+                            SizedBox(width: 4),
+                            Text(
+                              'Xem tất cả',
+                              style: TextStyle(
+                                color: Colors.orangeAccent,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
                     ),
-                    child: const Icon(Icons.add,
-                        color: Colors.orangeAccent, size: 20),
-                  ),
-                ),
+                  if (isHost || isJoined)
+                    GestureDetector(
+                      onTap: _showMediaPicker,
+                      child: Container(
+                        padding: const EdgeInsets.all(6),
+                        decoration: BoxDecoration(
+                          color: Colors.orangeAccent.withOpacity(0.15),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: const Icon(Icons.add,
+                            color: Colors.orangeAccent, size: 20),
+                      ),
+                    ),
+                ],
+              ),
             ],
           ),
           const SizedBox(height: 12),
@@ -2057,8 +2107,7 @@ class _ProductDetailPageState extends State<ProductDetailPage>
   // ==========================================================================
 
   Widget _buildActionRow() {
-    final showNewsfeedBtn = widget.product['id'] != null;
-    if (!isHost && !isJoined && !showNewsfeedBtn) return const SizedBox.shrink();
+    if (!isHost && !isJoined) return const SizedBox.shrink();
     return Wrap(
       alignment: WrapAlignment.center,
       spacing: 8,
@@ -2096,24 +2145,6 @@ class _ProductDetailPageState extends State<ProductDetailPage>
             outlined: true,
           ),
         ],
-        // 🆕 Dẫn qua newsfeed của kèo này (video/hình đã đăng cho kèo).
-        if (showNewsfeedBtn)
-          _ChipButton(
-            label: 'Newsfeed',
-            icon: Icons.dynamic_feed_rounded,
-            outlined: true,
-            onTap: () {
-              final idRaw = widget.product['id'];
-              final pid = int.tryParse(idRaw.toString());
-              if (pid == null) return;
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => NewsfeedPage(initialProductId: pid),
-                ),
-              );
-            },
-          ),
       ],
     );
   }
@@ -2335,6 +2366,7 @@ class _ProductDetailPageState extends State<ProductDetailPage>
             icon: Icons.chat_bubble_rounded,
             color: const Color(0xFF22C55E),
             onTap: _goToGroupChat,
+            glass: true,
           ),
           const SizedBox(width: 10),
           _ActionButton(
@@ -2342,26 +2374,27 @@ class _ProductDetailPageState extends State<ProductDetailPage>
             icon: Icons.logout_rounded,
             color: Colors.redAccent,
             onTap: _leaveInvite,
+            glass: true,
           ),
         ],
       ),
     ],
   );
 
-  Widget _buildClosedButton() => ElevatedButton(
-    key: const ValueKey('closed'),
-    style: ElevatedButton.styleFrom(
-      backgroundColor: Colors.white12,
-      padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 14),
-      shape:
-      RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
-    ),
-    onPressed: null,
-    child: Text(
-      inviteStatus != 'open' ? 'Bàn đã đóng' : 'Đã đủ người',
-      style: const TextStyle(color: Colors.white54),
-    ),
-  );
+  Widget _buildClosedButton() {
+    final isFull = inviteStatus == 'open';
+    return _ActionButton(
+      key: const ValueKey('closed'),
+      label: isFull ? 'Đã đủ người' : 'Bàn đã đóng',
+      // 🆕 Xám bạc pha ánh xanh (slate) thay vì trắng mờ đơn điệu —
+      // trung tính, sang, vẫn đủ tương phản trên nền gradient navy/cam.
+      // "Đủ người" dùng icon nhóm, "đã đóng" dùng icon khoá để phân biệt lý do.
+      icon: isFull ? Icons.groups_rounded : Icons.lock_rounded,
+      color: const Color(0xFF9FB0C3),
+      onTap: null,
+      glass: true,
+    );
+  }
 
   Widget _buildOpenJoinButton() => ScaleTransition(
     scale: _pulseAnimation,
@@ -2372,6 +2405,7 @@ class _ProductDetailPageState extends State<ProductDetailPage>
       color: _AppColors.accentOrange,
       onTap: inviteId == null ? null : _joinInvite,
       large: true,
+      glass: true,
     ),
   );
 
@@ -3198,7 +3232,7 @@ class _GradientBackground extends StatelessWidget {
   Widget build(BuildContext context) => Container(
     decoration: const BoxDecoration(
       gradient: LinearGradient(
-        colors: [Color(0xF21E3A8A), Color(0xD9FF7F50)],
+        colors: [Color(0xF20D47A1), Color(0xD9F57C00)],
         begin: Alignment.topLeft,
         end: Alignment.bottomRight,
       ),
@@ -3216,7 +3250,7 @@ class _GradientContainer extends StatelessWidget {
     padding: const EdgeInsets.all(20),
     decoration: BoxDecoration(
       gradient: const LinearGradient(
-        colors: [Color(0xF21E3A8A), Color(0xE5FF7F50)],
+        colors: [Color(0xF20D47A1), Color(0xE5F57C00)],
         begin: Alignment.topLeft,
         end: Alignment.bottomRight,
       ),
@@ -3245,7 +3279,7 @@ class _GradientBottomSheet extends StatelessWidget {
   Widget build(BuildContext context) => Container(
     decoration: const BoxDecoration(
       gradient: LinearGradient(
-        colors: [Color(0xF21E3A8A), Color(0xE5FF7F50)],
+        colors: [Color(0xF20D47A1), Color(0xE5F57C00)],
         begin: Alignment.topLeft,
         end: Alignment.bottomRight,
       ),
@@ -3299,12 +3333,13 @@ class _SectionCard extends StatelessWidget {
   );
 }
 
-class _ActionButton extends StatelessWidget {
+class _ActionButton extends StatefulWidget {
   final String label;
   final IconData? icon;
   final Color color;
   final VoidCallback? onTap;
   final bool large;
+  final bool glass;
 
   const _ActionButton({
     super.key,
@@ -3313,28 +3348,155 @@ class _ActionButton extends StatelessWidget {
     this.icon,
     this.onTap,
     this.large = false,
+    this.glass = false,
   });
 
   @override
-  Widget build(BuildContext context) => ElevatedButton.icon(
-    style: ElevatedButton.styleFrom(
-      backgroundColor: color,
-      padding: EdgeInsets.symmetric(
-        horizontal: large ? 36 : 20,
-        vertical: large ? 14 : 12,
+  State<_ActionButton> createState() => _ActionButtonState();
+}
+
+class _ActionButtonState extends State<_ActionButton> {
+  // 🆕 Cờ theo dõi trạng thái đang giữ nhấn, dùng để "lún" nút xuống
+  // (scale nhỏ lại + bóng thu gọn) mỗi khi người dùng chạm — tạo cảm
+  // giác phản hồi vật lý 3D thay vì chỉ đổi màu ripple mặc định.
+  bool _pressed = false;
+
+  void _setPressed(bool value) {
+    if (widget.onTap == null) return;
+    setState(() => _pressed = value);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final enabled = widget.onTap != null;
+    final label = widget.label;
+    final icon = widget.icon;
+    final color = widget.color;
+    final large = widget.large;
+
+    // 🆕 Kiểu "chip 3D trong suốt": lấy layout nhỏ gọn kiểu _CategoryChip
+    // (viền màu mảnh, bo tròn, icon nhỏ + label) nhưng KHÔNG có màu nền —
+    // hoàn toàn trong suốt để lộ gradient phía sau. Chiều sâu 3D được tạo
+    // bằng highlight sáng góc trên-trái; khi nhấn, highlight thu nhỏ +
+    // nút hơi co lại để mô phỏng việc bị ấn lún xuống.
+    if (widget.glass) {
+      return GestureDetector(
+        onTapDown: (_) => _setPressed(true),
+        onTapUp: (_) => _setPressed(false),
+        onTapCancel: () => _setPressed(false),
+        onTap: widget.onTap,
+        child: AnimatedScale(
+          scale: _pressed ? 0.94 : 1.0,
+          duration: const Duration(milliseconds: 110),
+          curve: Curves.easeOut,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 110),
+            padding: EdgeInsets.symmetric(
+              horizontal: large ? 30 : 16,
+              vertical: large ? 12 : 9,
+            ),
+            decoration: BoxDecoration(
+              color: Colors.transparent,
+              borderRadius: BorderRadius.circular(30),
+              border: Border.all(
+                color: enabled
+                    ? color.withOpacity(_pressed ? 0.75 : 0.55)
+                    : color.withOpacity(0.4),
+                width: 1.2,
+              ),
+              boxShadow: !enabled || _pressed
+                  ? const []
+                  : [
+                // Highlight phía trên-trái, biến mất khi đang nhấn
+                // để tạo cảm giác nút bị ấn lún vào mặt phẳng.
+                BoxShadow(
+                  color: color.withOpacity(0.22),
+                  blurRadius: 8,
+                  offset: const Offset(-2, -2),
+                ),
+              ],
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (icon != null) ...[
+                  Icon(icon,
+                      color: enabled ? color : color.withOpacity(0.65),
+                      size: large ? 20 : 15),
+                  const SizedBox(width: 6),
+                ],
+                Text(
+                  label,
+                  style: TextStyle(
+                    color: enabled ? Colors.white : Colors.white.withOpacity(0.62),
+                    fontSize: large ? 16 : 13,
+                    fontWeight: FontWeight.w600,
+                    shadows: const [
+                      Shadow(color: Colors.black45, blurRadius: 3),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
+    // 🆕 Nút đặc (solid) cũng đổi sang tự vẽ để có hiệu ứng "lún" 3D khi
+    // nhấn: bóng đổ dày khi ở trạng thái nghỉ, thu gọn + dịch xuống khi
+    // giữ nhấn, giả lập nút vật lý được ấn vào mặt phẳng.
+    return GestureDetector(
+      onTapDown: (_) => _setPressed(true),
+      onTapUp: (_) => _setPressed(false),
+      onTapCancel: () => _setPressed(false),
+      onTap: widget.onTap,
+      child: AnimatedScale(
+        scale: _pressed ? 0.96 : 1.0,
+        duration: const Duration(milliseconds: 110),
+        curve: Curves.easeOut,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 110),
+          padding: EdgeInsets.symmetric(
+            horizontal: large ? 36 : 20,
+            vertical: large ? 14 : 12,
+          ),
+          decoration: BoxDecoration(
+            color: enabled ? color : Colors.white12,
+            borderRadius: BorderRadius.circular(30),
+            boxShadow: enabled
+                ? [
+              BoxShadow(
+                color: color.withOpacity(_pressed ? 0.18 : 0.4),
+                blurRadius: _pressed ? 4 : 10,
+                offset:
+                _pressed ? const Offset(0, 1) : const Offset(0, 4),
+              ),
+            ]
+                : const [],
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (icon != null) ...[
+                Icon(icon,
+                    color: enabled ? Colors.white : Colors.white54,
+                    size: large ? 22 : 18),
+                const SizedBox(width: 8),
+              ],
+              Text(
+                label,
+                style: TextStyle(
+                  color: enabled ? Colors.white : Colors.white54,
+                  fontSize: large ? 16 : 14,
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
-      shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(30)),
-      elevation: 4,
-    ),
-    onPressed: onTap,
-    icon: icon != null
-        ? Icon(icon, color: Colors.white, size: large ? 22 : 18)
-        : const SizedBox.shrink(),
-    label: Text(label,
-        style: TextStyle(
-            color: Colors.white, fontSize: large ? 16 : 14)),
-  );
+    );
+  }
 }
 
 class _ChipButton extends StatelessWidget {
@@ -3375,7 +3537,7 @@ class _ChipButton extends StatelessWidget {
         )
             : BoxDecoration(
           gradient: const LinearGradient(
-              colors: [Color(0xFFFF7F50), Color(0xFFFF3D00)]),
+              colors: [Color(0xFFF57C00), Color(0xFFFF3D00)]),
           borderRadius: BorderRadius.circular(11),
           boxShadow: const [
             BoxShadow(

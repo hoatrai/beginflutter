@@ -19,8 +19,8 @@ class LegalPage extends StatelessWidget {
 
   // Cùng bộ màu với ProfilePage — nếu app có ThemeData/AppColors dùng chung,
   // có thể thay 2 dòng này bằng Theme.of(context) hoặc AppColors tương ứng.
-  static const Color primaryBlue = Color(0xFF1E3A8A);
-  static const Color accentOrange = Color(0xFFFF7F50);
+  static const Color primaryBlue = Color(0xFF0D47A1);
+  static const Color accentOrange = Color(0xFFF57C00);
 
   const LegalPage({
     super.key,

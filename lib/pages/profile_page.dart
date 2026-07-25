@@ -173,8 +173,8 @@ class _GlassAlertDialog extends StatelessWidget {
           borderRadius: BorderRadius.circular(24),
           gradient: LinearGradient(
             colors: [
-              const Color(0xFF1E3A8A),
-              const Color(0xFFFF7F50),
+              const Color(0xFF0D47A1),
+              const Color(0xFFF57C00),
             ],
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
@@ -288,8 +288,10 @@ class _ProfilePageState extends State<ProfilePage> {
   String? _errorMessage;
 
   // Theme colors
-  final Color primaryBlue = const Color(0xFF1E3A8A);
-  final Color accentOrange = const Color(0xFFFF7F50);
+  // 🆕 Thử đổi sang đúng tông màu của my_keo_page (Colors.blue.shade900 /
+  // Colors.orange.shade700) để so sánh xem có hợp hơn cặp navy/coral cũ không.
+  final Color primaryBlue = const Color(0xFF0D47A1);
+  final Color accentOrange = const Color(0xFFF57C00);
   final Color textWhite = Colors.white;
 
   @override
@@ -349,6 +351,62 @@ class _ProfilePageState extends State<ProfilePage> {
         _loading = false;
       });
     }
+  }
+
+  // 🆕 Snackbar kiểu "kính" gradient navy/cam — đồng bộ tone với MyKeoPage
+  // thay vì SnackBar mặc định của Material.
+  void _showThemedSnackBar(String message, {bool isError = false}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        behavior: SnackBarBehavior.floating,
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        padding: EdgeInsets.zero,
+        content: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(14),
+            gradient: LinearGradient(
+              colors: isError
+                  ? [Colors.red.shade900, Colors.red.shade600]
+                  : [primaryBlue, accentOrange.withOpacity(.85)],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(.35),
+                blurRadius: 12,
+                offset: const Offset(0, 6),
+              ),
+            ],
+          ),
+          child: Row(
+            children: [
+              Icon(
+                isError ? Icons.error_outline : Icons.check_circle_outline,
+                color: Colors.white,
+                size: 20,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  message,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w600,
+                    fontSize: 13,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   Future<void> _logout() async {
@@ -456,13 +514,14 @@ class _ProfilePageState extends State<ProfilePage> {
         return;
       } else {
         if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(data['message']?.toString() ?? "❌ Không thể xóa tài khoản"),
-        ));
+        _showThemedSnackBar(
+          data['message']?.toString() ?? "Không thể xóa tài khoản",
+          isError: true,
+        );
       }
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text("⚠️ Lỗi kết nối: $e")));
+      _showThemedSnackBar("Lỗi kết nối: $e", isError: true);
     }
 
     if (mounted) setState(() => _loading = false);
@@ -572,14 +631,13 @@ class _ProfilePageState extends State<ProfilePage> {
           if (infoItems.isNotEmpty)
             Container(
               decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(20),
+                borderRadius: BorderRadius.circular(18),
                 color: Colors.white.withOpacity(0.12),
-                border: Border.all(color: Colors.white.withOpacity(0.2), width: 1),
                 boxShadow: [
                   BoxShadow(
-                    color: Colors.black.withOpacity(0.15),
-                    blurRadius: 16,
-                    offset: const Offset(0, 8),
+                    color: Colors.black.withOpacity(0.25),
+                    blurRadius: 10,
+                    offset: const Offset(0, 6),
                   ),
                 ],
               ),
@@ -836,12 +894,17 @@ class _ProfilePageState extends State<ProfilePage> {
           child: Column(
             children: [
               const SizedBox(height: 20),
-              const Text(
-                "Thông tin tài khoản",
-                style: TextStyle(
-                  fontSize: 22,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.white,
+              ShaderMask(
+                shaderCallback: (bounds) => const LinearGradient(
+                  colors: [Colors.orange, Colors.red],
+                ).createShader(bounds),
+                child: const Text(
+                  "Thông tin tài khoản",
+                  style: TextStyle(
+                    fontSize: 22,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.white,
+                  ),
                 ),
               ),
               const SizedBox(height: 10),

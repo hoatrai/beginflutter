@@ -28,7 +28,7 @@ import 'user_info_page.dart';
 // ─────────────────────────────────────────────────────────────────────────
 
 const Color _bg = Colors.black;
-const Color _accentOrange = Color(0xFFFF7F50);
+const Color _accentOrange = Color(0xFFF57C00);
 
 // Bảng màu tạo "quầng sáng" riêng cho từng video (hash theo tên file →
 // luôn ra đúng 1 màu, không nháy loạn). Dùng RadialGradient (đậm ở giữa,
@@ -215,7 +215,7 @@ int _categoryTagPriority(String rawName) {
 
 Color _getCategoryColor(String text) {
   final lower = text.toLowerCase();
-  if (lower.contains('karaoke')) return const Color(0xFFFF7F50); // cam, đồng bộ tone accentOrange của app
+  if (lower.contains('karaoke')) return const Color(0xFFF57C00); // cam, đồng bộ tone accentOrange của app
   if (lower.contains('beer')) return const Color(0xFFFFC107); // vàng hổ phách
   if (lower.contains('nhậu')) return Colors.lightGreen;
   if (lower.contains('bar') || lower.contains('pub')) return Colors.cyan;

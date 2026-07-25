@@ -83,7 +83,19 @@ class _SpiritPostsPageState extends State<SpiritPostsPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('SpiritWebs Blog')),
+      appBar: AppBar(
+        title: const Text('SpiritWebs Blog', style: TextStyle(color: Colors.white)),
+        iconTheme: const IconThemeData(color: Colors.white),
+        flexibleSpace: Container(
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(
+              colors: [Color(0xFF0D47A1), Color(0xFFF57C00)],
+              begin: Alignment.centerLeft,
+              end: Alignment.centerRight,
+            ),
+          ),
+        ),
+      ),
       body: RefreshIndicator(
         onRefresh: _onRefresh,
         child: error != null

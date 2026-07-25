@@ -252,8 +252,8 @@ class _UserInfoPageState extends State<UserInfoPage> {
 
   @override
   Widget build(BuildContext context) {
-    const Color primaryBlue = Color(0xFF1E3A8A);
-    const Color accentOrange = Color(0xFFFF7F50);
+    const Color primaryBlue = Color(0xFF0D47A1);
+    const Color accentOrange = Color(0xFFF57C00);
 
     return Scaffold(
       resizeToAvoidBottomInset: true,

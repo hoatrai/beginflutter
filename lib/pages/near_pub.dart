@@ -586,7 +586,7 @@ out center tags;
         child: Container(
           decoration: BoxDecoration(
             gradient: const LinearGradient(
-              colors: [Color(0xFF1E3A8A), Color(0xFFFF7F50)], // 💙🧡 giống ProfilePage
+              colors: [Color(0xFF0D47A1), Color(0xFFF57C00)], // 💙🧡 giống ProfilePage
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
             ),
@@ -1070,8 +1070,8 @@ out center tags;
                     decoration: const BoxDecoration(
                       gradient: LinearGradient(
                         colors: [
-                          Color(0xFF1E3A8A),
-                          Color(0xFFFF7F50),
+                          Color(0xFF0D47A1),
+                          Color(0xFFF57C00),
                         ],
                         begin: Alignment.topLeft,
                         end: Alignment.bottomRight,
@@ -1281,7 +1281,7 @@ out center tags;
         body: Container(
           decoration: const BoxDecoration(
             gradient: LinearGradient(
-              colors: [Color(0xFF1E3A8A), Color(0xFFFF7F50)], // 💙🧡 giống ProfilePage
+              colors: [Color(0xFF0D47A1), Color(0xFFF57C00)], // 💙🧡 giống ProfilePage
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
             ),
@@ -1332,7 +1332,7 @@ out center tags;
           flexibleSpace: Container(
             decoration: const BoxDecoration(
               gradient: LinearGradient(
-                colors: [Color(0xFF1E3A8A), Color(0xFFFF7F50)], // xanh đậm -> cam (brand)
+                colors: [Color(0xFF0D47A1), Color(0xFFF57C00)], // xanh đậm -> cam (brand)
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
               ),

@@ -4,8 +4,8 @@ import 'notification_store.dart';
 import '../main.dart'
     show unreadNotiVN, openInviteById, openChatFromData, openGroupChatFromData;
 
-const _kNavy = Color(0xFF1E3A8A);
-const _kOrange = Color(0xFFFF7F50);
+const _kNavy = Color(0xFF0D47A1);
+const _kOrange = Color(0xFFF57C00);
 
 /// Mô tả icon/màu riêng cho từng loại thông báo — giúp người dùng
 /// nhận diện ngay loại thông báo (chat / kèo / nhóm...) chỉ bằng ánh mắt.
@@ -63,7 +63,7 @@ class _NotificationPageState extends State<NotificationPage> {
       body: Container(
         decoration: const BoxDecoration(
           gradient: LinearGradient(
-            colors: [Color(0xF01E3A8A), Color(0xD8FF7F50)],
+            colors: [Color(0xF00D47A1), Color(0xD8F57C00)],
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
           ),

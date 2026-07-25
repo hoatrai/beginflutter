@@ -32,8 +32,8 @@ class _AppColors {
   static const error = Color(0xFFF85149);
 
   // Gradient nền (đồng bộ với UserInfoPage)
-  static const bgGradientStart = Color(0xFF1E3A8A); // primaryBlue
-  static const bgGradientEnd = Color(0xFFFF7F50);   // accentOrange
+  static const bgGradientStart = Color(0xFF0D47A1); // primaryBlue
+  static const bgGradientEnd = Color(0xFFF57C00);   // accentOrange
 
   // Nền đặc cho popup/menu nổi (dropdown, date/time picker) — tông cam đậm, cùng tone accent
   static const popupSurface = Color(0xFFB04A1F);

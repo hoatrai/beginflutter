@@ -114,8 +114,8 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
 
 
   // Theme colors đồng bộ ProfilePage
-  final Color primaryBlue = const Color(0xFF1E3A8A);
-  final Color accentOrange = const Color(0xFFFF7F50);
+  final Color primaryBlue = const Color(0xFF0D47A1);
+  final Color accentOrange = const Color(0xFFF57C00);
   final Color textWhite = Colors.white;
 
   @override
@@ -3206,8 +3206,8 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
           decoration: BoxDecoration(
             gradient: LinearGradient(
               colors: [
-                const Color(0xFF1E3A8A).withOpacity(0.9), // primaryBlue
-                const Color(0xFFFF7F50).withOpacity(0.8), // accentOrange
+                const Color(0xFF0D47A1).withOpacity(0.9), // primaryBlue
+                const Color(0xFFF57C00).withOpacity(0.8), // accentOrange
               ],
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
@@ -3987,7 +3987,7 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
   // khớp tuyệt đối; ưu tiên theo thứ tự liệt kê bên dưới khi có nhiều match.
   Color _getCategoryColor(String text) {
     final lower = text.toLowerCase();
-    if (lower.contains('karaoke')) return const Color(0xFFFF7F50); // cam, đồng bộ tone accentOrange của app
+    if (lower.contains('karaoke')) return const Color(0xFFF57C00); // cam, đồng bộ tone accentOrange của app
     if (lower.contains('beer')) return const Color(0xFFFFC107); // vàng hổ phách, nổi trên nền xanh dương
     if (lower.contains('nhậu')) return Colors.lightGreen;
     if (lower.contains('bar') || lower.contains('pub')) return Colors.cyan;
@@ -5774,8 +5774,8 @@ class _InviteListPopupState extends State<InviteListPopup> {
       decoration: BoxDecoration(
         gradient: LinearGradient(
           colors: [
-            const Color(0xFF1E3A8A).withOpacity(0.9), // primaryBlue
-            const Color(0xFFFF7F50).withOpacity(0.85), // accentOrange
+            const Color(0xFF0D47A1).withOpacity(0.9), // primaryBlue
+            const Color(0xFFF57C00).withOpacity(0.85), // accentOrange
           ],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
@@ -5872,7 +5872,7 @@ class _InviteListPopupState extends State<InviteListPopup> {
                       height: 32,
                       child: ElevatedButton(
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFFFF7F50),
+                          backgroundColor: const Color(0xFFF57C00),
                           foregroundColor: Colors.white,
                           padding: const EdgeInsets.symmetric(horizontal: 12),
                           shape: RoundedRectangleBorder(
@@ -5920,7 +5920,7 @@ class _InviteListPopupState extends State<InviteListPopup> {
               ),
 
               style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFFFF7F50),
+                backgroundColor: const Color(0xFFF57C00),
                 elevation: 6,
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(14),

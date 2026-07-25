@@ -86,8 +86,8 @@ class _ChatPageState extends State<ChatPage> {
   Timer? _heartbeatTimer;
   int refCounter = 1;
   bool _hasJoinedRoom = false;
-  final Color primaryBlue = const Color(0xFF1E3A8A);
-  final Color accentOrange = const Color(0xFFFF7F50);
+  final Color primaryBlue = const Color(0xFF0D47A1);
+  final Color accentOrange = const Color(0xFFF57C00);
 
   // Nhớ callType của cuộc gọi mình vừa bấm "Gọi" — dùng cho fallback ở
   // event "call_accept" khi _onCallAccepted đã bị null (hiếm, do race
@@ -1128,6 +1128,55 @@ class _ChatPageState extends State<ChatPage> {
   }
 
 
+  Widget _buildEmptyChatState() {
+    return Center(
+      key: const ValueKey("emptyChat"),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Vòng tròn kính mờ ôm avatar/icon, đồng bộ phong cách "glass"
+            // của app thay vì icon trơ trọi giữa màn hình.
+            Container(
+              width: 84,
+              height: 84,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: Colors.white.withOpacity(0.08),
+                border: Border.all(color: Colors.white.withOpacity(0.25)),
+              ),
+              child: const Icon(
+                Icons.chat_bubble_outline_rounded,
+                size: 36,
+                color: Colors.white70,
+              ),
+            ),
+            const SizedBox(height: 18),
+            const Text(
+              "Chưa có tin nhắn nào",
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              "Gửi lời chào tới ${widget.targetUser} để bắt đầu cuộc trò chuyện 👋",
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: Colors.white.withOpacity(0.65),
+                fontSize: 13,
+                height: 1.4,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildLoadingList() {
     return ListView.builder(
       reverse: true,
@@ -1250,6 +1299,11 @@ class _ChatPageState extends State<ChatPage> {
                 valueListenable: messages,
                 builder: (_, msgs, __) {
                   final list = msgs.reversed.toList();
+                  // 🆕 Chưa có tin nhắn nào -> hiện empty state thân thiện
+                  // thay vì khung chat trắng trơn nhìn như bị lỗi.
+                  if (list.isEmpty) {
+                    return _buildEmptyChatState();
+                  }
                   return ListView.builder(
                     controller: scrollController,
                     reverse: true,
@@ -2179,8 +2233,8 @@ class _OutgoingCallScreenState extends State<_OutgoingCallScreen>
   late AnimationController _pulseController;
   late Animation<double> _pulseAnimation;
 
-  final Color primaryBlue = const Color(0xFF1E3A8A);
-  final Color accentOrange = const Color(0xFFFF7F50);
+  final Color primaryBlue = const Color(0xFF0D47A1);
+  final Color accentOrange = const Color(0xFFF57C00);
 
   @override
   void initState() {

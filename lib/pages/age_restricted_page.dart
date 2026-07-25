@@ -32,8 +32,15 @@ class _AgeRestrictedPageState extends State<AgeRestrictedPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.black,
-      body: SafeArea(
+      body: Container(
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            colors: [Color(0xE60D47A1), Color(0xCCF57C00)],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+        ),
+        child: SafeArea(
         child: Center(
           child: Padding(
             padding: const EdgeInsets.all(28),
@@ -73,6 +80,7 @@ class _AgeRestrictedPageState extends State<AgeRestrictedPage> {
             ),
           ),
         ),
+      ),
       ),
     );
   }

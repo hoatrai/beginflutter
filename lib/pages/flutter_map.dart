@@ -626,7 +626,7 @@ out center tags;
         child: Container(
           decoration: BoxDecoration(
             gradient: const LinearGradient(
-              colors: [Color(0xFF1E3A8A), Color(0xFFFF7F50)], // 💙🧡 giống ProfilePage
+              colors: [Color(0xFF0D47A1), Color(0xFFF57C00)], // 💙🧡 giống ProfilePage
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
             ),
@@ -1244,8 +1244,8 @@ out center tags;
                     dealColor: color,
                     wpService: wpService,
                     jwtToken: jwtToken,
-                    primaryBlue: const Color(0xFF1E3A8A),
-                    accentOrange: const Color(0xFFFF7F50),
+                    primaryBlue: const Color(0xFF0D47A1),
+                    accentOrange: const Color(0xFFF57C00),
                     // 🆕 Việc điều hướng sang trang detail được giao lại cho
                     // MapPage tự làm (thay vì dialog tự Navigator.pop rồi push
                     // bằng context của chính nó, dễ vỡ vì context đã bị pop).
@@ -1410,7 +1410,7 @@ out center tags;
         body: Container(
           decoration: const BoxDecoration(
             gradient: LinearGradient(
-              colors: [Color(0xFF1E3A8A), Color(0xFFFF7F50)], // 💙🧡 giống ProfilePage
+              colors: [Color(0xFF0D47A1), Color(0xFFF57C00)], // 💙🧡 giống ProfilePage
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
             ),
@@ -1461,7 +1461,7 @@ out center tags;
           flexibleSpace: Container(
             decoration: const BoxDecoration(
               gradient: LinearGradient(
-                colors: [Color(0xFF1E3A8A), Color(0xFFFF7F50)], // xanh đậm -> cam (brand)
+                colors: [Color(0xFF0D47A1), Color(0xFFF57C00)], // xanh đậm -> cam (brand)
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
               ),
@@ -1880,7 +1880,7 @@ class _DealDetailDialogState extends State<_DealDetailDialog> {
         child: Container(
           decoration: const BoxDecoration(
             gradient: LinearGradient(
-              colors: [Color(0xFF1E3A8A), Color(0xFF2D4FA8), Color(0xFFB85A30), Color(0xFFFF7F50)],
+              colors: [Color(0xFF0D47A1), Color(0xFF2D4FA8), Color(0xFFB85A30), Color(0xFFF57C00)],
               stops: [0.0, 0.38, 0.75, 1.0],
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
@@ -1938,7 +1938,7 @@ class _DealDetailDialogState extends State<_DealDetailDialog> {
                         height: 48,
                         decoration: const BoxDecoration(
                           gradient: LinearGradient(
-                            colors: [Colors.transparent, Color(0x8C1E3A8A)],
+                            colors: [Colors.transparent, Color(0x8C0D47A1)],
                             begin: Alignment.topCenter,
                             end: Alignment.bottomCenter,
                           ),

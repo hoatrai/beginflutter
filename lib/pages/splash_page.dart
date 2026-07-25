@@ -249,7 +249,7 @@ class _SplashPageState extends State<SplashPage> {
         ElevatedButton(
           onPressed: _init,
           style: ElevatedButton.styleFrom(
-            backgroundColor: Colors.orange,
+            backgroundColor: const Color(0xFFF57C00),
             foregroundColor: Colors.white,
           ),
           child: const Text("Thử lại"),
@@ -261,9 +261,17 @@ class _SplashPageState extends State<SplashPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.black,
-      body: Center(
-        child: _showRetry ? _buildRetryUI() : _buildLoadingShimmer(),
+      body: Container(
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            colors: [Color(0xE60D47A1), Color(0xCCF57C00)],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+        ),
+        child: Center(
+          child: _showRetry ? _buildRetryUI() : _buildLoadingShimmer(),
+        ),
       ),
     );
   }

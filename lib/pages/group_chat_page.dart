@@ -68,8 +68,8 @@ class _GroupChatPageState extends State<GroupChatPage> {
   bool _isConnected = false;
   bool _isReconnecting = false;
 
-  final Color primaryBlue = const Color(0xFF1E3A8A);
-  final Color accentOrange = const Color(0xFFFF7F50);
+  final Color primaryBlue = const Color(0xFF0D47A1);
+  final Color accentOrange = const Color(0xFFF57C00);
 
   final Map<int, String> _userAvatars = {};
   final List<String> _pendingTextQueue = [];
@@ -1000,6 +1000,12 @@ class _GroupChatPageState extends State<GroupChatPage> {
                   valueListenable: messages,
                   builder: (_, msgs, __) {
                     final list = msgs;
+                    // 🆕 Chưa có tin nhắn nào -> hiện empty state thân thiện
+                    // thay vì màn hình trắng/trống trơn, mời người dùng nhắn
+                    // trước thay vì để họ tự đoán chat có hoạt động không.
+                    if (list.isEmpty) {
+                      return _buildEmptyChatState();
+                    }
                     return ListView.builder(
                       key: const ValueKey("msgList"),
                       controller: scrollController,
@@ -1066,6 +1072,55 @@ class _GroupChatPageState extends State<GroupChatPage> {
                   ),
                 ),
               ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildEmptyChatState() {
+    return Center(
+      key: const ValueKey("emptyChat"),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Vòng tròn kính mờ ôm icon, đồng bộ phong cách "glass" của
+            // app thay vì icon trơ trọi giữa màn hình.
+            Container(
+              width: 84,
+              height: 84,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: Colors.white.withOpacity(0.08),
+                border: Border.all(color: Colors.white.withOpacity(0.25)),
+              ),
+              child: const Icon(
+                Icons.forum_rounded,
+                size: 38,
+                color: Colors.white70,
+              ),
+            ),
+            const SizedBox(height: 18),
+            const Text(
+              "Chưa có tin nhắn nào",
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              "Hãy là người đầu tiên bắt chuyện với cả bàn nhậu 🍻",
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: Colors.white.withOpacity(0.65),
+                fontSize: 13,
+                height: 1.4,
+              ),
+            ),
           ],
         ),
       ),

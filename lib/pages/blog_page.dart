@@ -40,7 +40,7 @@ class _BlogPageState extends State<BlogPage> {
     return Scaffold(
       appBar: AppBar(
           title: const Text("Sự kiện", style: TextStyle(color: Colors.white)),
-          backgroundColor: Colors.blue),
+          backgroundColor: const Color(0xFF0D47A1)),
       body: loading
           ? const Center(child: CircularProgressIndicator())
           : ListView.builder(

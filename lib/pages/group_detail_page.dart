@@ -18,8 +18,8 @@ class _GroupDetailPageState extends State<GroupDetailPage> {
   Map<String, dynamic>? data;
   bool loading = true;
 
-  final Color primaryBlue = const Color(0xFF1E3A8A);
-  final Color accentOrange = const Color(0xFFFF7F50);
+  final Color primaryBlue = const Color(0xFF0D47A1);
+  final Color accentOrange = const Color(0xFFF57C00);
 
   @override
   void initState() {

@@ -126,7 +126,18 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
           SizedBox.expand(
             child: Image.asset("assets/images/background.png", fit: BoxFit.cover),
           ),
-          Container(color: Colors.black.withOpacity(0.3)),
+          Container(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: [
+                  const Color(0xFF0D47A1).withOpacity(0.55),
+                  const Color(0xFFF57C00).withOpacity(0.45),
+                ],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+            ),
+          ),
           Center(
             child: SingleChildScrollView(
               padding: const EdgeInsets.all(24),

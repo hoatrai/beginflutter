@@ -375,8 +375,8 @@ void showAppNotification({required String title, required String body}) {
               borderRadius: BorderRadius.circular(16),
               gradient: LinearGradient(
                 colors: [
-                  const Color(0xFF1E3A8A).withOpacity(0.95),
-                  const Color(0xFFFF7F50).withOpacity(0.85),
+                  const Color(0xFF0D47A1).withOpacity(0.95),
+                  const Color(0xFFF57C00).withOpacity(0.85),
                 ],
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
@@ -709,8 +709,15 @@ class _MainPageState extends State<MainPage>
   late final AnimationController _fabController;
   late final Animation<double> _fabAnimation;
 
-  final Color primaryBlue = const Color(0xFF1E3A8A);
-  final Color accentOrange = const Color(0xFFFF7F50);
+  final Color primaryBlue = const Color(0xFF0D47A1);
+  final Color accentOrange = const Color(0xFFF57C00);
+
+  // 🆕 Viên nang (pill) trượt theo tab đang chọn trong thanh menu dưới.
+  // _navKeys: đo vị trí thật của từng icon để đặt pill cho đúng, vì layout
+  // 2 bên FAB ở giữa không đối xứng (2 icon trái + khoảng trống 40px + 2 icon phải).
+  final List<GlobalKey> _navKeys = List.generate(4, (_) => GlobalKey());
+  final GlobalKey _navBarKey = GlobalKey();
+  Rect? _pillRect;
 
   @override
   void initState() {
@@ -723,6 +730,9 @@ class _MainPageState extends State<MainPage>
     _fabAnimation = Tween<double>(begin: 1.0, end: 1.2).animate(
       CurvedAnimation(parent: _fabController, curve: Curves.easeInOut),
     );
+
+    // Đo vị trí pill lần đầu sau khi layout xong khung hình đầu tiên.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _updatePillPosition());
 
     // 🆕 Có data truyền sẵn từ SplashPage -> set ngay, khỏi chờ đọc storage
     // (bỏ hẳn màn hình loading chớp trắng cho luồng vào app phổ biến nhất).
@@ -870,6 +880,36 @@ class _MainPageState extends State<MainPage>
       _pageCache[index] ??= _pageFor(index);
     });
     activeTabIndexVN.value = index; // 🚀 báo cho các tab biết ai đang active
+    // Đợi frame vẽ xong (đổi màu icon xong) rồi mới đo lại vị trí cho pill trượt.
+    WidgetsBinding.instance.addPostFrameCallback((_) => _updatePillPosition());
+  }
+
+  // 🆕 Đo vị trí + kích thước thật của icon đang chọn (so với thanh nav)
+  // để đặt viên nang (pill) trượt tới đúng chỗ.
+  void _updatePillPosition() {
+    final barBox = _navBarKey.currentContext?.findRenderObject() as RenderBox?;
+    final itemBox = _navKeys[_selectedIndex].currentContext?.findRenderObject()
+        as RenderBox?;
+    if (barBox == null || itemBox == null || !barBox.attached || !itemBox.attached) {
+      return;
+    }
+
+    final itemSize = itemBox.size;
+    final itemOffset = itemBox.localToGlobal(Offset.zero, ancestor: barBox);
+
+    // Viên nang rộng hơn icon 1 chút cho thoáng, cao vừa đủ ôm icon + label.
+    const horizontalPad = 14.0;
+    const verticalPad = 4.0;
+    final rect = Rect.fromLTWH(
+      itemOffset.dx - horizontalPad,
+      itemOffset.dy - verticalPad,
+      itemSize.width + horizontalPad * 2,
+      itemSize.height + verticalPad * 2,
+    );
+
+    if (rect != _pillRect) {
+      setState(() => _pillRect = rect);
+    }
   }
 
   Widget _navItem(IconData icon, String label, int index) {
@@ -880,21 +920,29 @@ class _MainPageState extends State<MainPage>
     final unselectedColor = Colors.white.withOpacity(0.55);
 
     return GestureDetector(
+      key: _navKeys[index],
       onTap: () => _onItemTapped(index),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, color: isSelected ? accentOrange : unselectedColor),
-          const SizedBox(height: 2),
-          Text(
-            label,
-            style: TextStyle(
-              color: isSelected ? accentOrange : unselectedColor,
-              fontSize: 12,
-              fontWeight: FontWeight.w600,
+      behavior: HitTestBehavior.opaque,
+      child: AnimatedScale(
+        // 🆕 Icon đang chọn phình nhẹ lên -> cảm giác "nảy" khi đổi tab.
+        scale: isSelected ? 1.08 : 1.0,
+        duration: const Duration(milliseconds: 250),
+        curve: Curves.easeOutBack,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, color: isSelected ? accentOrange : unselectedColor),
+            const SizedBox(height: 2),
+            Text(
+              label,
+              style: TextStyle(
+                color: isSelected ? accentOrange : unselectedColor,
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -932,7 +980,7 @@ class _MainPageState extends State<MainPage>
                 child: Icon(Icons.local_bar_rounded, color: accentOrange, size: 32),
               ),
               const SizedBox(height: 18),
-              const CircularProgressIndicator(color: Color(0xFFFF7F50)),
+              const CircularProgressIndicator(color: Color(0xFFF57C00)),
             ],
           ),
         )
@@ -971,6 +1019,7 @@ class _MainPageState extends State<MainPage>
         shape: const CircularNotchedRectangle(),
         notchMargin: 8,
         child: Container(
+          key: _navBarKey,
           height: 60,
           decoration: BoxDecoration(
             gradient: LinearGradient(
@@ -983,14 +1032,47 @@ class _MainPageState extends State<MainPage>
             ),
             borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
           ),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceAround,
+          child: Stack(
+            alignment: Alignment.center,
             children: [
-              _navItem(Icons.group, "Lời mời", 0),
-              _navItem(Icons.map_outlined, "Bản đồ", 1),
-              const SizedBox(width: 40),
-              _navItem(Icons.article_outlined, "Quán", 2),
-              _navItem(Icons.account_circle_outlined, "Hồ sơ", 3),
+              // 🆕 Viên nang trượt mượt tới vị trí tab đang chọn, nằm phía
+              // sau Row các icon nên không che mất icon/label.
+              if (_pillRect != null)
+                AnimatedPositioned(
+                  duration: const Duration(milliseconds: 300),
+                  curve: Curves.easeOutCubic,
+                  left: _pillRect!.left,
+                  top: _pillRect!.top,
+                  width: _pillRect!.width,
+                  height: _pillRect!.height,
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.14),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(
+                        color: Colors.white.withOpacity(0.28),
+                        width: 1,
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.white.withOpacity(0.1),
+                          blurRadius: 8,
+                          spreadRadius: 0.3,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceAround,
+                children: [
+                  _navItem(Icons.group, "Lời mời", 0),
+                  _navItem(Icons.map_outlined, "Bản đồ", 1),
+                  const SizedBox(width: 40),
+                  _navItem(Icons.article_outlined, "Quán", 2),
+                  _navItem(Icons.account_circle_outlined, "Hồ sơ", 3),
+                ],
+              ),
             ],
           ),
         ),

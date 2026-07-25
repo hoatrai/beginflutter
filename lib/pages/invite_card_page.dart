@@ -206,14 +206,21 @@ class _InviteCardPageState extends State<InviteCardPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF0D0B10),
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
         title: const Text('Thiệp mời kèo', style: TextStyle(color: Colors.white)),
         iconTheme: const IconThemeData(color: Colors.white),
       ),
-      body: SafeArea(
+      body: Container(
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            colors: [Color(0xFF0D47A1), Color(0xFFF57C00)],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+        ),
+        child: SafeArea(
         child: Column(
           children: [
             Expanded(
@@ -274,7 +281,7 @@ class _InviteCardPageState extends State<InviteCardPage> {
                           : const Icon(Icons.ios_share_rounded),
                       label: Text(_isSharing ? 'Đang tạo thiệp...' : 'Chia sẻ thiệp'),
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFFFF6B35),
+                        backgroundColor: const Color(0xFFF57C00),
                         foregroundColor: Colors.white,
                         padding: const EdgeInsets.symmetric(vertical: 14),
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
@@ -286,6 +293,7 @@ class _InviteCardPageState extends State<InviteCardPage> {
             ),
           ],
         ),
+      ),
       ),
     );
   }

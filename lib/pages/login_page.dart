@@ -277,7 +277,18 @@ class _LoginPageState extends State<LoginPage> {
             ),
           ),
           // 2️⃣ Overlay mờ
-          Container(color: Colors.black.withOpacity(0.3)),
+          Container(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: [
+                  const Color(0xFF0D47A1).withOpacity(0.55),
+                  const Color(0xFFF57C00).withOpacity(0.45),
+                ],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+            ),
+          ),
           // 3️⃣ Form login
           Center(
             child: SingleChildScrollView(

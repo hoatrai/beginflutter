@@ -230,7 +230,7 @@ class WheelPainter extends CustomPainter {
     final anglePerItem = 2 * pi / items.length;
 
     for (int i = 0; i < items.length; i++) {
-      paint.color = i % 2 == 0 ? Colors.orange : Colors.deepOrange;
+      paint.color = i % 2 == 0 ? const Color(0xFF0D47A1) : const Color(0xFFF57C00);
 
       final startAngle = (i * anglePerItem) - (pi / 2);
 
