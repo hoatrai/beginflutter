@@ -27,6 +27,7 @@ import 'pages/chat_page.dart';
 import 'pages/group_chat_page.dart';
 import 'pages/notification_store.dart';
 import 'pages/video_call_page.dart';
+import 'services/notification_tts_service.dart';
 
 // ---------------- GLOBAL STATE ----------------
 
@@ -447,6 +448,10 @@ void showAppNotification({required String title, required String body}) {
 Future<void> setupFirebaseMessaging() async {
   final messaging = FirebaseMessaging.instance;
 
+  // 🔊 Khởi tạo TTS song song, không chặn luồng còn lại của hàm này (init
+  // TTS không quan trọng bằng việc app khởi động xong).
+  unawaited(NotificationTts.instance.init());
+
   final settings = await messaging.requestPermission(
     alert: true,
     badge: true,
@@ -540,6 +545,32 @@ Future<void> setupFirebaseMessaging() async {
 
     if (!isChattingWithSender && !isViewingSameGroup && !isViewingSameInvite) {
       showAppNotification(title: title, body: body);
+
+      // 🔊 Đọc to tin nhắn chat/nhóm mới tới, và cả thông báo tạo kèo tự
+      // động (invite_keo / new_product) — chỉ đọc đúng lúc banner thực sự
+      // hiện ra (user không đang mở sẵn đúng màn hình liên quan, nội dung
+      // đã hiển thị sẵn ở đó rồi nên không cần đọc lại gây phiền).
+      const speakableTypes = {
+        'chat_message',
+        'group_chat_message',
+        'invite_keo',
+        'new_product',
+        // 🆕 'user_joined'/'user_left'/'user_kicked' dùng chung cho CẢ tham
+        // gia nhóm (group_id trong data) LẪN tham gia/rời/bị kick kèo
+        // (invite_id trong data) — server phân biệt bằng key nào có mặt,
+        // còn phía app chỉ cần đọc to title/body có sẵn, không cần phân
+        // biệt case.
+        'user_joined',
+        'user_left',
+        'user_kicked',
+        // 🆕 Giờ backend đã gửi FCM riêng cho đổi trạng thái tham dự
+        // (PhoenixSocket.Notifications.send_attendance_updated_notification),
+        // không chỉ realtime qua WebSocket khi mở sẵn trang kèo nữa.
+        'attendance_updated',
+      };
+      if (speakableTypes.contains(type)) {
+        NotificationTts.instance.speak('$title. $body');
+      }
     }
   });
 

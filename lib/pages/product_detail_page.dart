@@ -626,28 +626,36 @@ class _ProductDetailPageState extends State<ProductDetailPage>
   void _showInviteNotification(String event, Map<String, dynamic> payload) {
     final name = payload['user_name']?.toString() ?? 'Ai đó';
     String? msg;
+    String? spokenText; // bản đọc to, không kèm emoji
     switch (event) {
       case 'user_joined':
         msg = '🙋 $name vừa tham gia bàn nhậu';
+        spokenText = '$name vừa tham gia bàn nhậu';
         break;
       case 'user_left':
         msg = '🚪 $name đã rời bàn';
+        spokenText = '$name đã rời bàn';
         break;
       case 'user_kicked':
         msg = '⛔ $name đã bị mời ra khỏi bàn';
+        spokenText = '$name đã bị mời ra khỏi bàn';
         break;
       case 'invite_closed':
         msg = '🔒 Chủ phòng đã đóng bàn';
+        spokenText = 'Chủ phòng đã đóng bàn';
         break;
       case 'invite_opened':
         msg = '🔓 Chủ phòng đã mở lại bàn';
+        spokenText = 'Chủ phòng đã mở lại bàn';
         break;
       case 'attendance_updated':
         final status = AttendanceStatusExt.fromKey(payload['status']?.toString());
         msg = '📍 $name: ${status.label}';
+        spokenText = '$name ${status.label}';
         break;
     }
     if (msg != null) _showSnack(msg);
+    if (spokenText != null) _speak(spokenText);
   }
 
   // ==========================================================================
