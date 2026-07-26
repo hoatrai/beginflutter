@@ -745,7 +745,7 @@ out center tags;
 
     _onlineChannel?.push("update_presence", {
       "user_id": userIdInt,
-      "username": widget.username.isNotEmpty ? widget.username : "hung2",
+      "username": widget.username.isNotEmpty ? widget.username : "Người dùng",
       "latitude": _currentPosition!.latitude,
       "longitude": _currentPosition!.longitude,
     });
@@ -766,7 +766,7 @@ out center tags;
       final metaInner = metasList.first; // fix: không nested 'metas' nữa
 
       presenceUsers[key] = {
-        'username': metaInner['username'] ?? 'hung3',
+        'username': metaInner['username'] ?? 'Người dùng',
         'user_id': key,
         'latitude': parseDouble(metaInner['latitude']),
         'longitude': parseDouble(metaInner['longitude']),
@@ -795,7 +795,7 @@ out center tags;
       if (metas.isEmpty) return;
 
       final meta = metas.first;
-      final username = meta['username'] ?? 'hung4';
+      final username = meta['username'] ?? 'Người dùng';
       final lat = parseDouble(meta['latitude']);
       final lng = parseDouble(meta['longitude']);
 
@@ -896,7 +896,7 @@ out center tags;
 
       // Thông tin người muốn chat
       final targetUserId = user['user_id'].toString();
-      final targetUsername = user['username'] ?? "hung5";
+      final targetUsername = user['username'] ?? "Người dùng";
 
       // ==== Thêm trạng thái user ====
       final status = user['status'] ?? "online"; // "online" | "background" | "offline"

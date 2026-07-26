@@ -701,7 +701,7 @@ class MainPage extends StatefulWidget {
 class _MainPageState extends State<MainPage>
     with SingleTickerProviderStateMixin {
   int _selectedIndex = 0;
-  Map<String, dynamic> _userData = {"slug": "Khách", "email": ""};
+  Map<String, dynamic> _userData = {"username": "Khách", "display_name": "Khách", "email": ""};
   int _userId = 0;
   bool _loading = true;
 
@@ -744,7 +744,7 @@ class _MainPageState extends State<MainPage>
       if (_userId != 0) {
         PresenceService.instance.start(
           userId: _userId,
-          username: _userData['display_name'] ?? _userData['slug'] ?? 'Khách',
+          username: _userData['display_name'] ?? _userData['username'] ?? 'Khách',
         );
       }
     } else {
@@ -766,7 +766,7 @@ class _MainPageState extends State<MainPage>
   }
 
   Future<void> _bootstrap() async {
-    Map<String, dynamic> userData = {"slug": "Khách", "email": ""};
+    Map<String, dynamic> userData = {"username": "Khách", "display_name": "Khách", "email": ""};
     int userId = 0;
 
     try {
@@ -800,7 +800,7 @@ class _MainPageState extends State<MainPage>
     if (userId != 0) {
       PresenceService.instance.start(
         userId: userId,
-        username: userData['display_name'] ?? userData['slug'] ?? 'Khách',
+        username: userData['display_name'] ?? userData['username'] ?? 'Khách',
       );
     }
   }
@@ -812,7 +812,7 @@ class _MainPageState extends State<MainPage>
       case 1:
         return MapPage(
           userId: _userId,
-          username: _userData['display_name'] ?? _userData['slug'] ?? 'Khách',
+          username: _userData['display_name'] ?? _userData['username'] ?? 'Khách',
           email: _userData['email'] ?? '',
         );
       case 2:

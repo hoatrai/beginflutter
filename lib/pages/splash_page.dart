@@ -50,6 +50,22 @@ class _SplashPageState extends State<SplashPage> {
     );
   }
 
+  /// 🆕 Chuẩn hoá response thô của /me (spiritwebs/v1/me) về đúng 1 schema
+  /// user_data duy nhất cho cả app: {id, username, display_name, email,
+  /// avatar_url}. Trước đây Splash ghi thẳng `jsonEncode(me)` — response gốc
+  /// dùng key "nickname" chứ KHÔNG có "display_name" — nên mỗi lần mở lại
+  /// app (Splash chạy lại), user_data bị ghi đè về dạng thiếu display_name,
+  /// làm UserHelper/MainPage hiện "-" dù lúc login đã lưu đúng tên.
+  Map<String, dynamic> _normalizeMe(Map<String, dynamic> me) {
+    return {
+      "id": (me['id'] ?? '').toString(),
+      "username": me['username'] ?? '',
+      "display_name": (me['nickname'] ?? me['username'] ?? 'Người dùng').toString(),
+      "email": me['email'] ?? '',
+      "avatar_url": me['avatar_url'] ?? '',
+    };
+  }
+
   Future<void> _init() async {
     if (mounted) {
       setState(() => _showRetry = false);
@@ -63,10 +79,13 @@ class _SplashPageState extends State<SplashPage> {
       switch (response.result) {
         case MeResult.success:
           final me = response.data!;
+          final normalizedUser = _normalizeMe(me);
 
           // ✅ LƯU LẠI USER STATE (RẤT QUAN TRỌNG)
+          // 🆕 Lưu theo schema chuẩn (normalizedUser), không lưu thẳng `me`
+          // thô nữa — xem giải thích ở _normalizeMe().
           await StorageHelper.write("user_id", me['id'].toString());
-          await StorageHelper.write("user_data", jsonEncode(me));
+          await StorageHelper.write("user_data", jsonEncode(normalizedUser));
 
           // 🆕 AGE-GATE: kiểm tra TRƯỚC must_set_password, vì nếu tài khoản
           // đã bị đánh dấu age_restricted thì không được đi tiếp bất kỳ
@@ -87,7 +106,7 @@ class _SplashPageState extends State<SplashPage> {
           }
 
           _goMain(
-            userData: me,
+            userData: normalizedUser,
             userId: int.tryParse(me['id'].toString()) ?? 0,
           );
           return;
@@ -162,9 +181,22 @@ class _SplashPageState extends State<SplashPage> {
 
       if (data['token'] == null || data['user_id'] == null) return false;
 
+      // 🆕 API guest-login trả object "user" với key khác hẳn schema chuẩn
+      // (ID/user_login/user_email/display_name kiểu WP_User) — chuẩn hoá lại
+      // trước khi lưu, để không lệch với schema {id, username, display_name,
+      // email, avatar_url} dùng xuyên suốt app.
+      final rawGuestUser = (data['user'] as Map?) ?? {};
+      final guestUserData = {
+        "id": (rawGuestUser['ID'] ?? data['user_id'] ?? '').toString(),
+        "username": rawGuestUser['user_login'] ?? '',
+        "display_name": rawGuestUser['display_name'] ?? rawGuestUser['user_login'] ?? 'Khách',
+        "email": rawGuestUser['user_email'] ?? '',
+        "avatar_url": '',
+      };
+
       await StorageHelper.write("jwt_token", data['token']);
       await StorageHelper.write("user_id", data['user_id'].toString());
-      await StorageHelper.write("user_data", jsonEncode(data['user']));
+      await StorageHelper.write("user_data", jsonEncode(guestUserData));
       await StorageHelper.write("is_guest", data['is_guest'].toString());
 
       return true;

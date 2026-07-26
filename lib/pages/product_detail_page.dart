@@ -34,6 +34,22 @@ import '../config/app_config.dart';
 import '../app_globals.dart';
 
 // =============================================================================
+// 🆕 Nhãn hoạt động theo thể loại (Nhậu/Karaoke/Bar-Pub/Beer Club) — dùng để
+// thông báo "tham gia/rời ..." đọc đúng thể loại thay vì luôn cố định
+// "bàn nhậu". Match theo "chứa" (giống hệt _getCategoryColor() bên
+// shop_page.dart/invite_card_page.dart) vì category_names có thể là chuỗi
+// gộp nhiều thể loại, vd "Nhậu, Karaoke".
+// =============================================================================
+String _getCategoryActivityLabel(String categoryText) {
+  final lower = categoryText.toLowerCase();
+  if (lower.contains('karaoke')) return 'buổi karaoke';
+  if (lower.contains('beer')) return 'buổi beer club';
+  if (lower.contains('bar') || lower.contains('pub')) return 'buổi bar/pub';
+  if (lower.contains('nhậu')) return 'bàn nhậu';
+  return 'bàn nhậu'; // fallback: giữ đúng hành vi cũ khi không xác định được thể loại
+}
+
+// =============================================================================
 // CONSTANTS
 // =============================================================================
 
@@ -286,6 +302,23 @@ class _ProductDetailPageState extends State<ProductDetailPage>
   int viewerCount = 0;
 
   String? inviteStatus;
+
+  // 🆕 Nhãn hoạt động theo thể loại của kèo này (vd "buổi karaoke",
+  // "bàn nhậu"...) — tính 1 lần từ widget.product, dùng chung cho mọi
+  // thông báo tham gia/rời/kick trong _showInviteNotification().
+  String get _activityLabel {
+    final cats = widget.product['categories'] as List<dynamic>? ?? [];
+    final catNames = cats
+        .map((c) => (c as Map<String, dynamic>)['name']?.toString() ?? '')
+        .where((n) => n.isNotEmpty)
+        .join(', ');
+    // Một số nơi (vd sau khi tạo/join lại) chỉ có sẵn 'category_names'
+    // (chuỗi) thay vì 'categories' (list) — dùng luôn nếu 'categories' rỗng.
+    final fallback = catNames.isEmpty
+        ? (widget.product['category_names']?.toString() ?? '')
+        : catNames;
+    return _getCategoryActivityLabel(fallback);
+  }
 
   // ── Video ──────────────────────────────────────────────────────────────────
   // key = index in the carousel mediaList
@@ -624,30 +657,39 @@ class _ProductDetailPageState extends State<ProductDetailPage>
   }
 
   /// Hiện snackbar thông báo khi nhận được event từ người khác trong nhóm.
+  // 🔧 FIX: đọc đúng tên hoạt động theo thể loại của kèo (vd "buổi karaoke",
+  // "buổi bar/pub", "buổi beer club") thay vì luôn cố định "bàn nhậu" —
+  // dùng _activityLabel (tính từ categories của widget.product).
+  // 🔧 FIX: fallback đọc cả 'username' (khoá do backend Phoenix cũ trả về)
+  // lẫn 'user_name' (khoá client tự push), để không hiện "Ai đó" nếu 1 trong
+  // 2 nguồn còn sót lại còn dùng khoá kia.
   void _showInviteNotification(String event, Map<String, dynamic> payload) {
-    final name = payload['user_name']?.toString() ?? 'Ai đó';
+    final name = payload['user_name']?.toString() ??
+        payload['username']?.toString() ??
+        'Ai đó';
+    final activity = _activityLabel;
     String? msg;
     String? spokenText; // bản đọc to, không kèm emoji
     switch (event) {
       case 'user_joined':
-        msg = '🙋 $name vừa tham gia bàn nhậu';
-        spokenText = '$name vừa tham gia bàn nhậu';
+        msg = '🙋 $name vừa tham gia $activity';
+        spokenText = '$name vừa tham gia $activity';
         break;
       case 'user_left':
-        msg = '🚪 $name đã rời bàn';
-        spokenText = '$name đã rời bàn';
+        msg = '🚪 $name đã rời $activity';
+        spokenText = '$name đã rời $activity';
         break;
       case 'user_kicked':
-        msg = '⛔ $name đã bị mời ra khỏi bàn';
-        spokenText = '$name đã bị mời ra khỏi bàn';
+        msg = '⛔ $name đã bị mời ra khỏi $activity';
+        spokenText = '$name đã bị mời ra khỏi $activity';
         break;
       case 'invite_closed':
-        msg = '🔒 Chủ phòng đã đóng bàn';
-        spokenText = 'Chủ phòng đã đóng bàn';
+        msg = '🔒 Chủ phòng đã đóng $activity';
+        spokenText = 'Chủ phòng đã đóng $activity';
         break;
       case 'invite_opened':
-        msg = '🔓 Chủ phòng đã mở lại bàn';
-        spokenText = 'Chủ phòng đã mở lại bàn';
+        msg = '🔓 Chủ phòng đã mở lại $activity';
+        spokenText = 'Chủ phòng đã mở lại $activity';
         break;
       case 'attendance_updated':
         final status = AttendanceStatusExt.fromKey(payload['status']?.toString());

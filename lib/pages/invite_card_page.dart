@@ -36,6 +36,30 @@ class InviteCardPage extends StatefulWidget {
   State<InviteCardPage> createState() => _InviteCardPageState();
 }
 
+// 🎨 Sao chép nguyên logic màu theo thể loại từ shop_page.dart (🎤 Karaoke,
+// 🍸 Bar/Pub, 🍻 Beer Club, 🍻 Nhậu), để thiệp mời đồng bộ tông màu với
+// card/chip thể loại hiển thị ở ShopPage/Newsfeed. category_names có thể là
+// chuỗi gộp nhiều thể loại nên match theo "chứa" thay vì so khớp tuyệt đối.
+Color _getCategoryColor(String text) {
+  final lower = text.toLowerCase();
+  if (lower.contains('karaoke')) return const Color(0xFFF57C00); // cam, đồng bộ tone accentOrange của app
+  if (lower.contains('beer')) return const Color(0xFFFFC107); // vàng hổ phách
+  if (lower.contains('nhậu')) return Colors.lightGreen;
+  if (lower.contains('bar') || lower.contains('pub')) return Colors.cyan;
+  return const Color(0xFFFF6B35); // fallback: giữ tông cam gốc của thiệp khi không xác định được thể loại
+}
+
+// 🆕 Emoji đại diện thể loại, hiển thị trong chip category trên thiệp —
+// cùng logic "match theo chứa" như _getCategoryColor() để nhất quán.
+String _getCategoryEmoji(String text) {
+  final lower = text.toLowerCase();
+  if (lower.contains('karaoke')) return '🎤';
+  if (lower.contains('beer')) return '🍻';
+  if (lower.contains('nhậu')) return '🍻';
+  if (lower.contains('bar') || lower.contains('pub')) return '🍸';
+  return '🎉';
+}
+
 class _InviteCardPageState extends State<InviteCardPage> {
   final GlobalKey _cardKey = GlobalKey();
   bool _isSharing = false;
@@ -52,6 +76,8 @@ class _InviteCardPageState extends State<InviteCardPage> {
   late final String _hostName;
   late final String _hostAvatar;
   late final String _link;
+  late final Color _categoryColor;
+  late final String _categoryLabel;
 
   @override
   void initState() {
@@ -59,6 +85,20 @@ class _InviteCardPageState extends State<InviteCardPage> {
     final product = widget.product;
     final meta = (product['meta'] is Map) ? product['meta'] as Map : {};
     final metaData = (product['meta_data'] is List) ? product['meta_data'] as List : [];
+
+    // 🆕 Màu bên trong thiệp giờ "phai" theo màu thể loại của kèo (Nhậu/
+    // Karaoke/Bar-Pub/Beer Club) — dùng đúng logic _getCategoryColor() đã
+    // có sẵn ở shop_page.dart/newsfeed_page.dart để đồng bộ tông màu xuyên
+    // suốt app, thay vì màu vàng-cam cố định như trước (không phân biệt
+    // được kèo thể loại gì chỉ nhìn qua thiệp).
+    final categoryNames = product['category_names']?.toString() ?? '';
+    _categoryColor = _getCategoryColor(categoryNames);
+    // 🆕 Nhãn thể loại hiển thị dạng chip trên thiệp (vd "🍻 Nhậu"). Nếu
+    // category_names rỗng thì không hiện chip (xử lý ở _InviteCard).
+    final trimmedCategoryNames = categoryNames.trim();
+    _categoryLabel = trimmedCategoryNames.isEmpty
+        ? ''
+        : '${_getCategoryEmoji(trimmedCategoryNames)} $trimmedCategoryNames';
 
     _id = product['id']?.toString() ?? '';
     _title = (product['name'] ?? 'Kèo nhậu').toString();
@@ -211,6 +251,21 @@ class _InviteCardPageState extends State<InviteCardPage> {
         elevation: 0,
         title: const Text('Thiệp mời kèo', style: TextStyle(color: Colors.white)),
         iconTheme: const IconThemeData(color: Colors.white),
+        // 🆕 FIX (khoảng trắng trên cùng trang chia sẻ thiệp): AppBar để
+        // backgroundColor: transparent nhưng KHÔNG có gì tô màu đằng sau nó —
+        // phần gradient chỉ nằm trong `body`, bắt đầu NGAY DƯỚI AppBar, nên
+        // cả dải status bar + toolbar phía trên chỉ lộ ra màu nền trắng mặc
+        // định của Scaffold. Thêm flexibleSpace với đúng gradient của body để
+        // lấp kín, không còn khoảng trắng nữa.
+        flexibleSpace: Container(
+          decoration: const BoxDecoration(
+            gradient: LinearGradient(
+              colors: [Color(0xFF0D47A1), Color(0xFFF57C00)],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+          ),
+        ),
       ),
       body: Container(
         decoration: const BoxDecoration(
@@ -221,79 +276,81 @@ class _InviteCardPageState extends State<InviteCardPage> {
           ),
         ),
         child: SafeArea(
-        child: Column(
-          children: [
-            Expanded(
-              child: Center(
-                child: SingleChildScrollView(
-                  padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 20),
-                  child: RepaintBoundary(
-                    key: _cardKey,
-                    child: _InviteCard(
-                      title: _title,
-                      timeText: _formatTime(),
-                      pubName: _pubName,
-                      address: _address,
-                      priceText: _priceText,
-                      slots: _slots,
-                      coverUrl: _coverUrl,
-                      hostName: _hostName,
-                      hostAvatar: _hostAvatar,
-                      qrData: _link,
+          child: Column(
+            children: [
+              Expanded(
+                child: Center(
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 20),
+                    child: RepaintBoundary(
+                      key: _cardKey,
+                      child: _InviteCard(
+                        title: _title,
+                        timeText: _formatTime(),
+                        pubName: _pubName,
+                        address: _address,
+                        priceText: _priceText,
+                        slots: _slots,
+                        coverUrl: _coverUrl,
+                        hostName: _hostName,
+                        hostAvatar: _hostAvatar,
+                        qrData: _link,
+                        categoryColor: _categoryColor,
+                        categoryLabel: _categoryLabel,
+                      ),
                     ),
                   ),
                 ),
               ),
-            ),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      onPressed: _isSaving ? null : _saveCard,
-                      icon: _isSaving
-                          ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white70),
-                      )
-                          : const Icon(Icons.download_rounded, color: Colors.white70),
-                      label: const Text('Lưu ảnh', style: TextStyle(color: Colors.white70)),
-                      style: OutlinedButton.styleFrom(
-                        side: const BorderSide(color: Colors.white24),
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: _isSaving ? null : _saveCard,
+                        icon: _isSaving
+                            ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white70),
+                        )
+                            : const Icon(Icons.download_rounded, color: Colors.white70),
+                        label: const Text('Lưu ảnh', style: TextStyle(color: Colors.white70)),
+                        style: OutlinedButton.styleFrom(
+                          side: const BorderSide(color: Colors.white24),
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                        ),
                       ),
                     ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    flex: 2,
-                    child: ElevatedButton.icon(
-                      onPressed: _isSharing ? null : _shareCard,
-                      icon: _isSharing
-                          ? const SizedBox(
-                        width: 16,
-                        height: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
-                      )
-                          : const Icon(Icons.ios_share_rounded),
-                      label: Text(_isSharing ? 'Đang tạo thiệp...' : 'Chia sẻ thiệp'),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFFF57C00),
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      flex: 2,
+                      child: ElevatedButton.icon(
+                        onPressed: _isSharing ? null : _shareCard,
+                        icon: _isSharing
+                            ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                        )
+                            : const Icon(Icons.ios_share_rounded),
+                        label: Text(_isSharing ? 'Đang tạo thiệp...' : 'Chia sẻ thiệp'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFFF57C00),
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                        ),
                       ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
-      ),
       ),
     );
   }
@@ -313,6 +370,12 @@ class _InviteCard extends StatelessWidget {
   final String hostName;
   final String hostAvatar;
   final String qrData;
+  // 🆕 Màu thể loại của kèo (Nhậu/Karaoke/Bar-Pub/Beer) — dùng để "nhuộm"
+  // màu bên trong thiệp thay vì luôn cố định vàng-cam như trước, giúp nhìn
+  // thiệp là biết ngay kèo thuộc thể loại gì.
+  final Color categoryColor;
+  // 🆕 Nhãn thể loại hiển thị dạng chip (vd "🍻 Nhậu"), rỗng thì ẩn chip.
+  final String categoryLabel;
 
   const _InviteCard({
     required this.title,
@@ -325,12 +388,38 @@ class _InviteCard extends StatelessWidget {
     required this.hostName,
     required this.hostAvatar,
     required this.qrData,
+    required this.categoryColor,
+    required this.categoryLabel,
   });
 
-  static const _gold = Color(0xFFFFC94D);
-  static const _orange = Color(0xFFFF6B35);
-  static const _cardBg1 = Color(0xFF1B1220);
-  static const _cardBg2 = Color(0xFF3A1B12);
+  // 🆕 Trước đây 4 màu này cố định (static const) — giờ tính theo
+  // categoryColor nên phải chuyển thành getter theo từng instance. VÌ VẬY,
+  // MỌI nơi sử dụng các getter này bên dưới đều KHÔNG được đánh dấu `const`
+  // (kể cả các widget cha bao ngoài chúng), nếu không sẽ lỗi biên dịch
+  // "Not a constant expression":
+  //  - _gold: màu chữ/viền nhấn sáng — làm sáng categoryColor lên 1 chút để
+  //    vẫn nổi rõ trên nền tối, thay vì luôn vàng.
+  //  - _orange: màu nhấn đậm (badge, bóng đổ, viền khung) — chính là
+  //    categoryColor gốc.
+  //  - _cardBg1/_cardBg2: nền tối bên trong thiệp — giữ đúng hue của
+  //    categoryColor nhưng hạ độ sáng thật thấp để chữ trắng vẫn đọc rõ
+  //    (đây chính là chỗ "màu bên trong thiệp phai theo màu category").
+  Color get _gold {
+    final hsl = HSLColor.fromColor(categoryColor);
+    return hsl.withLightness((hsl.lightness + 0.20).clamp(0.0, 1.0)).toColor();
+  }
+
+  Color get _orange => categoryColor;
+
+  Color get _cardBg1 {
+    final hue = HSLColor.fromColor(categoryColor).hue;
+    return HSLColor.fromAHSL(1.0, hue, 0.45, 0.14).toColor();
+  }
+
+  Color get _cardBg2 {
+    final hue = HSLColor.fromColor(categoryColor).hue;
+    return HSLColor.fromAHSL(1.0, hue, 0.55, 0.07).toColor();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -339,7 +428,8 @@ class _InviteCard extends StatelessWidget {
       clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(28),
-        gradient: const LinearGradient(
+        // 🔧 Không được const vì _gold/_orange là getter theo instance.
+        gradient: LinearGradient(
           colors: [_gold, _orange],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
@@ -354,7 +444,8 @@ class _InviteCard extends StatelessWidget {
         clipBehavior: Clip.antiAlias,
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(26),
-          gradient: const LinearGradient(
+          // 🔧 Không được const vì _cardBg1/_cardBg2 là getter theo instance.
+          gradient: LinearGradient(
             colors: [_cardBg1, _cardBg2],
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
@@ -381,6 +472,10 @@ class _InviteCard extends StatelessWidget {
                       height: 1.25,
                     ),
                   ),
+                  if (categoryLabel.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    _buildCategoryChip(),
+                  ],
                   const SizedBox(height: 12),
                   _buildHostRow(),
                   const SizedBox(height: 18),
@@ -466,9 +561,10 @@ class _InviteCard extends StatelessWidget {
 
   Widget _coverFallback() {
     return Container(
-      decoration: const BoxDecoration(
+      // 🔧 Không được const vì _orange là getter theo instance.
+      decoration: BoxDecoration(
         gradient: LinearGradient(
-          colors: [Color(0xFF3A1B12), Color(0xFF6B2E12), _orange],
+          colors: [const Color(0xFF3A1B12), const Color(0xFF6B2E12), _orange],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
@@ -500,7 +596,8 @@ class _InviteCard extends StatelessWidget {
         child: Image.asset(
           'assets/images/logo.png',
           fit: BoxFit.contain,
-          errorBuilder: (_, __, ___) => const Icon(Icons.sports_bar_rounded, size: 18, color: _orange),
+          // 🔧 Không được const vì _orange là getter theo instance.
+          errorBuilder: (_, __, ___) => Icon(Icons.sports_bar_rounded, size: 18, color: _orange),
         ),
       ),
     );
@@ -514,13 +611,40 @@ class _InviteCard extends StatelessWidget {
         borderRadius: BorderRadius.circular(20),
         border: Border.all(color: _gold.withOpacity(0.6)),
       ),
+      // 🔧 Không được const vì _gold là getter theo instance.
       child: Text(
         text,
-        style: const TextStyle(
+        style: TextStyle(
           color: _gold,
           fontSize: 12,
           fontWeight: FontWeight.w700,
           letterSpacing: 0.4,
+        ),
+      ),
+    );
+  }
+
+  // 🆕 Chip thể loại (vd "🍻 Nhậu") — nền phai theo categoryColor, đặt ngay
+  // dưới tiêu đề để người nhận thiệp biết ngay kèo thuộc thể loại gì mà
+  // không cần bấm vào QR. Không được const vì _orange/_gold là getter.
+  Widget _buildCategoryChip() {
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+        decoration: BoxDecoration(
+          color: _orange.withOpacity(0.18),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: _orange.withOpacity(0.5)),
+        ),
+        child: Text(
+          categoryLabel,
+          style: TextStyle(
+            color: _gold,
+            fontSize: 11,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 0.2,
+          ),
         ),
       ),
     );
@@ -563,11 +687,13 @@ class _InviteCard extends StatelessWidget {
                 child: Image.asset(
                   'assets/images/logo.png',
                   fit: BoxFit.contain,
-                  errorBuilder: (_, __, ___) => const Icon(Icons.sports_bar_rounded, size: 16, color: _gold),
+                  // 🔧 Không được const vì _gold là getter theo instance.
+                  errorBuilder: (_, __, ___) => Icon(Icons.sports_bar_rounded, size: 16, color: _gold),
                 ),
               ),
               const SizedBox(width: 6),
-              const Text(
+              // 🔧 Không được const vì _gold là getter theo instance.
+              Text(
                 'KEOGO',
                 style: TextStyle(
                   color: _gold,

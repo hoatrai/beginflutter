@@ -98,6 +98,47 @@ class _LoginPageState extends State<LoginPage> {
   }
 
 
+  /// 🆕 Gọi /wp-json/spiritwebs/v1/me và lưu "user_data" theo đúng 1 schema
+  /// chuẩn duy nhất: {id, username, display_name, email, avatar_url}.
+  /// Đây là hàm DUY NHẤT trong app nên dùng để cache lại thông tin user sau
+  /// khi login — mọi nơi khác (UserHelper, MainPage, PresenceService...) chỉ
+  /// cần đọc từ "user_data" theo đúng 5 field này, không tự map field khác
+  /// nhau nữa (trước đây mỗi trang tự đọc display_name/name/username/slug
+  /// riêng, dẫn tới hiện "-"/"Khách" không nhất quán giữa các màn hình).
+  ///
+  /// Nếu /me lỗi (mất mạng, timeout...), KHÔNG để user_data trống trơn —
+  /// giữ lại tên tối thiểu đã có từ bước đăng nhập, để ít nhất còn hiện
+  /// đúng tên thay vì "-".
+  Future<void> _fetchAndCacheFullUser(
+    String token, {
+    required String fallbackId,
+    required String fallbackName,
+  }) async {
+    try {
+      final res = await http.get(
+        Uri.parse("${AppConfig.webDomain}/wp-json/spiritwebs/v1/me"),
+        headers: {"Authorization": "Bearer $token"},
+      ).timeout(const Duration(seconds: 10));
+
+      if (res.statusCode == 200) {
+        final me = jsonDecode(res.body) as Map<String, dynamic>;
+        if (me['logged_in'] == true) {
+          await StorageHelper.write("user_data", jsonEncode({
+            "id": (me['id'] ?? fallbackId).toString(),
+            "username": me['username'] ?? '',
+            "display_name": (me['nickname'] ?? fallbackName).toString(),
+            "email": me['email'] ?? '',
+            "avatar_url": me['avatar_url'] ?? '',
+          }));
+          return;
+        }
+      }
+      debugPrint("⚠️ /me trả về không hợp lệ (status=${res.statusCode}), giữ nguyên user_data tạm.");
+    } catch (e) {
+      debugPrint("⚠️ Gọi /me sau login lỗi (giữ nguyên user_data tạm, không chặn đăng nhập): $e");
+    }
+  }
+
   // 🔹 Login bằng username/password
   Future<void> _login() async {
     setState(() {
@@ -117,15 +158,35 @@ class _LoginPageState extends State<LoginPage> {
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
-        final userData = {
-          "email": data["user_email"] ?? "",
-          "slug": data["user_nicename"] ?? "",
-          "name": data["username"] ?? "",
-        };
 
+        // 🆕 FIX (username/avatar lúc có lúc không ở chat/map/thông báo):
+        // trước đây chỗ này ghi "user_data" TẠM 1 lần với field rời rạc
+        // (email/slug/name, không có display_name/avatar_url), rồi mới ghi
+        // đè lần 2 bằng /custom/v1/user/{id} — nhưng API đó KHÔNG trả
+        // avatar_url, và nếu request lỗi/mất mạng thì app kẹt luôn ở bản
+        // ghi tạm thiếu display_name. Mỗi trang trong app lại tự fallback
+        // khác nhau -> chỗ hiện "-", chỗ hiện "Khách", chỗ hiện tên đúng.
+        //
+        // Giờ dùng 1 nguồn DUY NHẤT: token trước, rồi gọi thẳng
+        // /wp-json/spiritwebs/v1/me (endpoint đã có sẵn avatar_url với ảnh
+        // mặc định tử tế) và lưu xuống "user_data" theo đúng 1 schema cố
+        // định: {id, username, display_name, email, avatar_url}. Mọi trang
+        // khác (UserHelper, MainPage, PresenceService...) đều đọc từ đúng
+        // schema này, không còn lệch nhau nữa.
         await StorageHelper.write("jwt_token", data["token"]);
         await StorageHelper.write("token_time", DateTime.now().toIso8601String());
-        await StorageHelper.write("user_data", jsonEncode(userData));
+
+        // Ghi tạm 1 bản tối thiểu ngay lập tức (phòng trường hợp app bị
+        // tắt/crash trước khi gọi xong /me) — nhưng vẫn đủ 5 field theo
+        // đúng schema chuẩn, không để thiếu display_name như code cũ.
+        final fallbackName = (data["user_nicename"] ?? data["user_email"] ?? "Người dùng").toString();
+        await StorageHelper.write("user_data", jsonEncode({
+          "id": "",
+          "username": data["user_nicename"] ?? "",
+          "display_name": fallbackName,
+          "email": data["user_email"] ?? "",
+          "avatar_url": "",
+        }));
 
 // 🔹 Trích user_id trực tiếp từ JWT và lưu vào Storage
         final token = data["token"];
@@ -158,20 +219,10 @@ class _LoginPageState extends State<LoginPage> {
             debugPrint("issue-refresh-token lỗi (bỏ qua, không chặn đăng nhập): $e");
           }
 
-
-
-
-          // ✅ Chỗ này là viết đoạn gọi API user full
-          final resUser = await http.get(
-            Uri.parse("${AppConfig.webDomain}/wp-json/custom/v1/user/$userId"),
-            headers: {"Authorization": "Bearer $token"},
-          );
-
-          if (resUser.statusCode == 200) {
-            final userFullData = jsonDecode(resUser.body);
-            await StorageHelper.write("user_data", jsonEncode(userFullData));
-          }
-
+          // ✅ Nguồn chuẩn duy nhất cho user_data: /me — có avatar_url với
+          // fallback tử tế, và "nickname" (ưu tiên nickname riêng, fallback
+          // display_name) dùng làm display_name cho app.
+          await _fetchAndCacheFullUser(token, fallbackId: userId, fallbackName: fallbackName);
         }
 
 

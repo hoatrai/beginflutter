@@ -879,91 +879,101 @@ class _GroupChatPageState extends State<GroupChatPage> {
     return Scaffold(
       appBar: PreferredSize(
         preferredSize: const Size.fromHeight(110),
-        child: SafeArea(
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                colors: [primaryBlue.withOpacity(0.9), accentOrange.withOpacity(0.8)],
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-              ),
-              boxShadow: const [
-                BoxShadow(color: Colors.black26, blurRadius: 4, offset: Offset(0, 2))
-              ],
+        // 🆕 FIX (khoảng trắng trên cùng trang chat nhóm): trước đây
+        // SafeArea bọc NGOÀI Container có gradient — nghĩa là phần đệm an
+        // toàn (đúng bằng chiều cao status bar) bị đẩy ra NGOÀI vùng tô màu,
+        // nên chỗ đó không được vẽ gì cả và lộ màu nền trắng mặc định của
+        // Scaffold phía sau. Giờ đảo lại: Container (gradient) bọc NGOÀI để
+        // phủ kín luôn cả dải status bar, SafeArea chuyển vào TRONG chỉ để
+        // đệm cho nội dung (icon back, tên nhóm...) khỏi bị status bar che,
+        // không còn ảnh hưởng tới vùng tô nền nữa.
+        child: Container(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: [primaryBlue.withOpacity(0.9), accentOrange.withOpacity(0.8)],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
             ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    GestureDetector(
-                      onTap: () => Navigator.pop(context),
-                      child: const Icon(Icons.arrow_back_ios_new, color: Colors.white, size: 20),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Text(
-                        widget.groupName,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                            color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+            boxShadow: const [
+              BoxShadow(color: Colors.black26, blurRadius: 4, offset: Offset(0, 2))
+            ],
+          ),
+          child: SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      GestureDetector(
+                        onTap: () => Navigator.pop(context),
+                        child: const Icon(Icons.arrow_back_ios_new, color: Colors.white, size: 20),
                       ),
-                    ),
-                    if (!_isConnected)
-                      const Padding(
-                        padding: EdgeInsets.only(left: 6),
-                        child: Icon(Icons.cloud_off, color: Colors.white70, size: 18),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          widget.groupName,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                              color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                        ),
                       ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                if (participants.value.isNotEmpty)
-                  SizedBox(
-                    height: 36,
-                    child: ValueListenableBuilder<List<_Participant>>(
-                      valueListenable: participants,
-                      builder: (_, list, __) => ListView.separated(
-                        scrollDirection: Axis.horizontal,
-                        itemCount: list.length,
-                        separatorBuilder: (_, __) => const SizedBox(width: 8),
-                        itemBuilder: (_, i) {
-                          final p = list[i];
-                          return Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              CircleAvatar(
-                                radius: 16,
-                                backgroundColor: Colors.white24,
-                                backgroundImage: (p.avatarUrl != null && p.avatarUrl!.isNotEmpty)
-                                    ? NetworkImage(p.avatarUrl!)
-                                    : null,
-                                child: (p.avatarUrl == null || p.avatarUrl!.isEmpty)
-                                    ? Text(
-                                  p.username.isNotEmpty
-                                      ? p.username[0].toUpperCase()
-                                      : "-",
-                                  style:
-                                  const TextStyle(color: Colors.white, fontSize: 12),
-                                )
-                                    : null,
-                              ),
-                              const SizedBox(height: 2),
-                              Flexible(
-                                child: Text(
-                                  p.username,
-                                  style: const TextStyle(fontSize: 10, color: Colors.white70),
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ),
-                            ],
-                          );
-                        },
-                      ),
-                    ),
+                      if (!_isConnected)
+                        const Padding(
+                          padding: EdgeInsets.only(left: 6),
+                          child: Icon(Icons.cloud_off, color: Colors.white70, size: 18),
+                        ),
+                    ],
                   ),
-              ],
+                  const SizedBox(height: 8),
+                  if (participants.value.isNotEmpty)
+                    SizedBox(
+                      height: 36,
+                      child: ValueListenableBuilder<List<_Participant>>(
+                        valueListenable: participants,
+                        builder: (_, list, __) => ListView.separated(
+                          scrollDirection: Axis.horizontal,
+                          itemCount: list.length,
+                          separatorBuilder: (_, __) => const SizedBox(width: 8),
+                          itemBuilder: (_, i) {
+                            final p = list[i];
+                            return Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                CircleAvatar(
+                                  radius: 16,
+                                  backgroundColor: Colors.white24,
+                                  backgroundImage: (p.avatarUrl != null && p.avatarUrl!.isNotEmpty)
+                                      ? NetworkImage(p.avatarUrl!)
+                                      : null,
+                                  child: (p.avatarUrl == null || p.avatarUrl!.isEmpty)
+                                      ? Text(
+                                    p.username.isNotEmpty
+                                        ? p.username[0].toUpperCase()
+                                        : "-",
+                                    style:
+                                    const TextStyle(color: Colors.white, fontSize: 12),
+                                  )
+                                      : null,
+                                ),
+                                const SizedBox(height: 2),
+                                Flexible(
+                                  child: Text(
+                                    p.username,
+                                    style: const TextStyle(fontSize: 10, color: Colors.white70),
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                              ],
+                            );
+                          },
+                        ),
+                      ),
+                    ),
+                ],
+              ),
             ),
           ),
         ),
