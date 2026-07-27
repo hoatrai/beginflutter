@@ -164,6 +164,7 @@ Future<bool> _openChatFromData(Map<String, dynamic> data) async {
       return false;
     }
     final senderName = data['sender_username']?.toString() ?? 'Người dùng';
+    final senderAvatar = data['sender_avatar']?.toString();
 
     final me = await _resolveCurrentUser();
     if (me == null) {
@@ -187,6 +188,9 @@ Future<bool> _openChatFromData(Map<String, dynamic> data) async {
           username: myUsername,
           targetId: senderId,
           targetUser: senderName,
+          targetAvatar: (senderAvatar != null && senderAvatar.isNotEmpty)
+              ? senderAvatar
+              : null,
         ),
       ),
     );
@@ -296,6 +300,15 @@ Future<void> main() async {
     await CallkitService.instance.init().timeout(const Duration(seconds: 10));
   } catch (e) {
     debugPrint('⚠️ CallkitService init failed/timeout: $e');
+  }
+
+  // 🆕 Khôi phục lịch sử thông báo đã lưu từ lần chạy trước (xem
+  // notification_store.dart -> NotificationStore.init/_persist). Giới hạn
+  // thời gian để không chặn khởi động app nếu storage có vấn đề.
+  try {
+    await NotificationStore.init().timeout(const Duration(seconds: 5));
+  } catch (e) {
+    debugPrint('⚠️ NotificationStore.init failed/timeout: $e');
   }
 
   runApp(const CryptoApp(initialPage: SplashPage()));
@@ -523,6 +536,14 @@ Future<void> setupFirebaseMessaging() async {
 
     unreadNotiVN.value++;
 
+    // 🆕 Bắn tín hiệu realtime cho ChatListPage (nếu đang mở) — xem
+    // app_globals.dart -> newChatMessageVN. Chỉ chat 1-1 mới cập nhật
+    // badge/last_message trong danh sách chat 1-1, group_chat_message
+    // không liên quan tới trang này.
+    if (type == 'chat_message') {
+      newChatMessageVN.value = Map<String, dynamic>.from(message.data);
+    }
+
     // Không hiện banner nếu đang mở đúng cuộc chat với người gửi tin
     final senderId = int.tryParse(message.data['sender_id'] ?? '') ?? -1;
     final isChattingWithSender =
@@ -537,7 +558,14 @@ Future<void> setupFirebaseMessaging() async {
     // trang đó đã tự hiện SnackBar realtime qua socket rồi (xem
     // product_detail_page.dart -> _showInviteNotification).
     final inviteIdFromData = int.tryParse(message.data['invite_id'] ?? '') ?? -1;
-    const inviteEventTypes = {'user_joined', 'user_left', 'user_kicked'};
+    // 🆕 Thêm 'invite_closed', 'invite_opened' vào đây — trang
+    // product_detail_page đã tự đọc 2 sự kiện này qua socket riêng khi
+    // đang mở sẵn (_showInviteNotification), nên phải loại trừ ở đây để
+    // không bị đọc/hiện banner 2 lần cho cùng 1 sự kiện.
+    const inviteEventTypes = {
+      'user_joined', 'user_left', 'user_kicked',
+      'invite_closed', 'invite_opened',
+    };
     final isViewingSameInvite = inviteEventTypes.contains(type) &&
         isInviteDetailOpen &&
         currentInviteId != null &&
@@ -567,6 +595,12 @@ Future<void> setupFirebaseMessaging() async {
         // (PhoenixSocket.Notifications.send_attendance_updated_notification),
         // không chỉ realtime qua WebSocket khi mở sẵn trang kèo nữa.
         'attendance_updated',
+        // 🆕 Chủ phòng đóng/mở kèo — trước đây backend không gửi FCM cho
+        // 2 loại này (chỉ báo admin), giờ đã có
+        // send_invite_closed_notification / send_invite_opened_notification
+        // bên Phoenix nên thêm vào đây để đọc to khi đang ở trang khác.
+        'invite_closed',
+        'invite_opened',
       };
       if (speakableTypes.contains(type)) {
         NotificationTts.instance.speak('$title. $body');
@@ -889,7 +923,7 @@ class _MainPageState extends State<MainPage>
   void _updatePillPosition() {
     final barBox = _navBarKey.currentContext?.findRenderObject() as RenderBox?;
     final itemBox = _navKeys[_selectedIndex].currentContext?.findRenderObject()
-        as RenderBox?;
+    as RenderBox?;
     if (barBox == null || itemBox == null || !barBox.attached || !itemBox.attached) {
       return;
     }

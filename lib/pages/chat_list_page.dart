@@ -7,6 +7,7 @@ import 'chat_page.dart';
 import 'flutter_map.dart';
 import 'package:shimmer/shimmer.dart' as shimmer;
 import '../config/app_config.dart';
+import '../services/app_globals.dart';
 import 'package:intl/intl.dart';
 //import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
@@ -32,6 +33,47 @@ class _ChatListPageState extends State<ChatListPage> {
   void initState() {
     super.initState();
     _fetchChatList();
+    // 🆕 Lắng nghe push "chat_message" tới lúc đang mở trang này, để badge
+    // chưa đọc + tin nhắn cuối tự cập nhật realtime (xem main.dart +
+    // app_globals.dart -> newChatMessageVN).
+    newChatMessageVN.addListener(_onNewChatMessage);
+  }
+
+  @override
+  void dispose() {
+    newChatMessageVN.removeListener(_onNewChatMessage);
+    super.dispose();
+  }
+
+  /// Cập nhật cục bộ khi có tin nhắn 1-1 mới tới trong lúc đang xem list.
+  /// Nếu đã có sẵn cuộc chat với người gửi trong danh sách -> cập nhật
+  /// last_message/badge + đẩy lên đầu. Nếu là người CHƯA từng chat (chưa
+  /// có trong list) -> gọi lại API để lấy đủ thông tin (tên, avatar...).
+  void _onNewChatMessage() {
+    if (!mounted) return;
+    final data = newChatMessageVN.value;
+    if (data == null) return;
+
+    final senderId = data['sender_id']?.toString();
+    if (senderId == null || senderId.isEmpty) return;
+
+    final idx = chatList.indexWhere((c) => c["target_id"]?.toString() == senderId);
+    if (idx == -1) {
+      // Cuộc trò chuyện mới, chưa có sẵn trong list -> fetch lại cho chắc.
+      _fetchChatList();
+      return;
+    }
+
+    setState(() {
+      final chat = Map<String, dynamic>.from(chatList[idx]);
+      final currentUnread = int.tryParse(chat["unread_count"]?.toString() ?? "") ?? 0;
+      chat["last_message"] = data["message"]?.toString() ?? chat["last_message"];
+      chat["updated_at"] = DateTime.now().toIso8601String();
+      chat["unread_count"] = currentUnread + 1;
+
+      chatList.removeAt(idx);
+      chatList.insert(0, chat); // đẩy cuộc chat vừa nhắn lên đầu
+    });
   }
 
   /// ✅ Format thời gian: hôm nay -> giờ:phút, khác ngày -> dd/MM
@@ -151,7 +193,7 @@ class _ChatListPageState extends State<ChatListPage> {
         final myIdInt = int.tryParse(myId) ?? 0;
 
         if (!mounted) return;
-        Navigator.push(
+        await Navigator.push(
           context,
           MaterialPageRoute(
             builder: (context) => ChatPage(
@@ -164,6 +206,18 @@ class _ChatListPageState extends State<ChatListPage> {
             ),
           ),
         );
+
+        if (!mounted) return;
+        // ✅ ChatPage đã tự gọi mark-chat-read khi mở, nên xoá badge NGAY
+        // lúc quay lại thay vì đợi user thoát hẳn ra vào lại ChatListPage.
+        setState(() {
+          final idx = chatList.indexWhere(
+              (c) => c["target_id"]?.toString() == targetId);
+          if (idx != -1) chatList[idx]["unread_count"] = 0;
+        });
+        // Đồng bộ lại toàn bộ danh sách nền (phòng trường hợp có tin mới
+        // đến từ người khác trong lúc đang chat).
+        _fetchChatList();
       },
       child: Container(
         margin: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),

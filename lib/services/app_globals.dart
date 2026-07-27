@@ -60,6 +60,14 @@ int? currentInviteId;
 /// Được set mỗi khi fetchMeSafe() thành công (app start, sau login, v.v.)
 String currentUserAvatar = '';
 
+// ✅ thêm mới — bắn tín hiệu mỗi khi có push "chat_message" tới (foreground),
+// để ChatListPage (nếu đang mở) tự cập nhật last_message/badge realtime mà
+// không cần user thoát ra vào lại trang. Luôn gán 1 Map MỚI (không tái sử
+// dụng reference) để ValueNotifier chắc chắn bắn listener mỗi lần, kể cả
+// khi 2 tin liên tiếp đến từ cùng 1 người.
+final ValueNotifier<Map<String, dynamic>?> newChatMessageVN =
+    ValueNotifier<Map<String, dynamic>?>(null);
+
 enum MeResult { success, unauthorized, networkError }
 
 class FetchMeResponse {

@@ -72,7 +72,6 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
   double? myLat;
   double? myLng;
 
-  final Set<String> _fetchingHostStats = {};
   final Set<String> _fetchingCreators = {};
   bool _didPreload = false;
   String? activityType;
@@ -220,6 +219,44 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
       }
     } catch (e) {
       debugPrint("host stats error: $e");
+    }
+  }
+
+  /// 🆕 BULK: thay thế việc mỗi card tự gọi fetchHostStats(creatorId) RIÊNG
+  /// (mỗi creator khác nhau trong 1 trang -> 1 request song song riêng tới
+  /// /user-stats/<id>) bằng ĐÚNG 1 request cho toàn bộ creator của trang,
+  /// giống hệt pattern fetchCreatorsBulk/fetchInviteStatusesBulk đã dùng.
+  Future<void> fetchHostStatsBulk(List<String> ids) async {
+    final newIds = ids
+        .where((id) => id != "0" && !hostStatsMap.containsKey(id))
+        .toSet()
+        .toList();
+
+    if (newIds.isEmpty) return;
+
+    try {
+      final url = Uri.parse(
+        "${AppConfig.webDomain}/wp-json/nhau/v1/user-stats-bulk"
+            "?ids=${newIds.join(',')}",
+      );
+      final res = await http.get(url).timeout(const Duration(seconds: 15));
+
+      if (res.statusCode != 200) return;
+
+      final data = jsonDecode(res.body);
+      if (data['success'] != true) return;
+
+      final Map statsMap = data['data'] ?? {};
+      if (statsMap.isEmpty) return;
+
+      if (!mounted) return;
+      setState(() {
+        statsMap.forEach((id, stats) {
+          hostStatsMap[id.toString()] = stats;
+        });
+      });
+    } catch (e) {
+      debugPrint("❌ fetchHostStatsBulk error: $e");
     }
   }
 
@@ -1558,6 +1595,12 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
         if (!creatorNames.containsKey(creatorId)) {
           await fetchCreatorsBulk([creatorId]);
         }
+        // 🆕 sản phẩm mới đến qua socket không nằm trong đợt fetchProducts()
+        // nào cả -> cũng cần nạp host stats riêng cho creator này (vẫn gọi
+        // qua endpoint bulk, chỉ với 1 id, để dùng chung 1 hàm/1 công thức).
+        if (!hostStatsMap.containsKey(creatorId)) {
+          fetchHostStatsBulk([creatorId]);
+        }
         productMap['creatorName'] = creatorNames[creatorId] ?? '...';
 
         // Cập nhật vào UI
@@ -1763,9 +1806,11 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
         return d1.compareTo(d2);
       });
 
+      List<dynamic> newOnesForThisPage = [];
       setState(() {
         final existingIds = products.map((p) => p['id']).toSet();
         final newOnes = parsedProducts.where((p) => !existingIds.contains(p['id'])).toList();
+        newOnesForThisPage = newOnes; // 🆕 giữ lại để chỉ check status cho đúng trang này
         products.addAll(newOnes);
         loading = false;
         _loadingMore = false;
@@ -1797,7 +1842,16 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
         if (!mounted) return;
         Future.wait([
           fetchCreatorsBulk(creatorIds.toList()),
-          filterClosedProducts(),                  // 🆕 lọc kèo đã đóng
+          // 🆕 host stats (điểm uy tín, số kèo đã tổ chức...) cho tất cả
+          // creator của trang này trong 1 request duy nhất — thay vì mỗi
+          // card tự bắn request riêng lúc build (xem itemBuilder bên dưới).
+          fetchHostStatsBulk(creatorIds.toList()),
+          // 🆕 FIX: chỉ check status cho các id vừa thêm ở trang này, không
+          // gửi lại toàn bộ products đã tải (trước đây products.map(...) lấy
+          // TOÀN BỘ list -> request phình to dần theo mỗi lần load-more).
+          filterClosedProducts(
+            newOnesForThisPage.map((p) => p['id'].toString()).toList(),
+          ),
           Future(() => preloadInviteStatuses()),   // giữ badge "Còn X slots"
         ]);
       });
@@ -4031,32 +4085,45 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
 
     Widget videoMainCell() => _CardVideoPreview(url: videoUrl);
 
+    // 🆕 FIX: giới hạn decode theo kích thước hiển thị thực tế (x dpr),
+    // giống HeroProductImage/mainCell — trước đây subCell không set
+    // memCacheWidth/Height nên luôn decode full-resolution vào RAM dù ô
+    // collage chỉ rộng ~1/3-1/2 card, gây giật/tốn RAM khi cuộn nhiều card.
     Widget subCell(String url, {String? badge}) {
-      return Stack(
-        fit: StackFit.expand,
-        children: [
-          CachedNetworkImage(
-            imageUrl: url,
-            fit: BoxFit.cover,
-            errorWidget: (_, __, ___) => Container(
-              color: Colors.black26,
-              child: const Icon(Icons.broken_image, color: Colors.white38),
-            ),
-          ),
-          if (badge != null)
-            Container(
-              color: Colors.black.withOpacity(0.55),
-              alignment: Alignment.center,
-              child: Text(
-                badge,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 19,
+      return LayoutBuilder(
+        builder: (context, constraints) {
+          final dpr = MediaQuery.of(context).devicePixelRatio;
+          final double w = constraints.maxWidth.isFinite ? constraints.maxWidth : 200;
+          final double h = constraints.maxHeight.isFinite ? constraints.maxHeight : 200;
+          return Stack(
+            fit: StackFit.expand,
+            children: [
+              CachedNetworkImage(
+                imageUrl: url,
+                fit: BoxFit.cover,
+                memCacheWidth: (w * dpr).round(),
+                memCacheHeight: (h * dpr).round(),
+                errorWidget: (_, __, ___) => Container(
+                  color: Colors.black26,
+                  child: const Icon(Icons.broken_image, color: Colors.white38),
                 ),
               ),
-            ),
-        ],
+              if (badge != null)
+                Container(
+                  color: Colors.black.withOpacity(0.55),
+                  alignment: Alignment.center,
+                  child: Text(
+                    badge,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 19,
+                    ),
+                  ),
+                ),
+            ],
+          );
+        },
       );
     }
 
@@ -4154,32 +4221,45 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
       );
     }
 
+    // 🆕 FIX: giới hạn decode theo kích thước hiển thị thực tế (x dpr),
+    // giống HeroProductImage/mainCell — trước đây subCell không set
+    // memCacheWidth/Height nên luôn decode full-resolution vào RAM dù ô
+    // collage chỉ rộng ~1/3-1/2 card, gây giật/tốn RAM khi cuộn nhiều card.
     Widget subCell(String url, {String? badge}) {
-      return Stack(
-        fit: StackFit.expand,
-        children: [
-          CachedNetworkImage(
-            imageUrl: url,
-            fit: BoxFit.cover,
-            errorWidget: (_, __, ___) => Container(
-              color: Colors.black26,
-              child: const Icon(Icons.broken_image, color: Colors.white38),
-            ),
-          ),
-          if (badge != null)
-            Container(
-              color: Colors.black.withOpacity(0.55),
-              alignment: Alignment.center,
-              child: Text(
-                badge,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 19,
+      return LayoutBuilder(
+        builder: (context, constraints) {
+          final dpr = MediaQuery.of(context).devicePixelRatio;
+          final double w = constraints.maxWidth.isFinite ? constraints.maxWidth : 200;
+          final double h = constraints.maxHeight.isFinite ? constraints.maxHeight : 200;
+          return Stack(
+            fit: StackFit.expand,
+            children: [
+              CachedNetworkImage(
+                imageUrl: url,
+                fit: BoxFit.cover,
+                memCacheWidth: (w * dpr).round(),
+                memCacheHeight: (h * dpr).round(),
+                errorWidget: (_, __, ___) => Container(
+                  color: Colors.black26,
+                  child: const Icon(Icons.broken_image, color: Colors.white38),
                 ),
               ),
-            ),
-        ],
+              if (badge != null)
+                Container(
+                  color: Colors.black.withOpacity(0.55),
+                  alignment: Alignment.center,
+                  child: Text(
+                    badge,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 19,
+                    ),
+                  ),
+                ),
+            ],
+          );
+        },
       );
     }
 
@@ -4394,10 +4474,18 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> filterClosedProducts() async {
+  // 🆕 FIX: nhận vào danh sách id cụ thể cần check (thường là chỉ trang vừa
+  // load thêm), thay vì luôn tự suy ra từ TOÀN BỘ `products` đã tải — càng
+  // cuộn sâu, request cũ càng phình to và lặp lại việc check các kèo đã ổn
+  // định từ lâu. Nếu không truyền gì (idsToCheck == null), giữ hành vi cũ
+  // (check toàn bộ) để không phá các lần gọi khác nếu có trong tương lai.
+  Future<void> filterClosedProducts([List<String>? idsToCheck]) async {
     if (products.isEmpty) return;
 
-    final ids = products.map((p) => p['id'].toString()).join(',');
+    final targetIds = idsToCheck ?? products.map((p) => p['id'].toString()).toList();
+    if (targetIds.isEmpty) return;
+
+    final ids = targetIds.join(',');
 
     try {
       final res = await http
@@ -4713,6 +4801,31 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
 
                             final product = filtered[index];
 
+                            // 🆕 PREFETCH TRANG TIẾP THEO SỚM: trước đây chỉ
+                            // gọi fetchProducts() khi user CUỘN TỚI SÁT ĐÁY
+                            // (dựa vào ScrollEndNotification + ngưỡng pixel cố
+                            // định 300px), nên card cuối/shimmer loading vẫn
+                            // hay bị "hụt" 1 nhịp — cảm giác giật/khoảng trống
+                            // khi cuộn nhanh xuống hết trang.
+                            //
+                            // Giờ trigger dựa vào INDEX (còn ~3 card nữa là
+                            // hết danh sách hiện có) thay vì dựa vào pixel:
+                            // không phụ thuộc chiều cao thật của từng card
+                            // (card có video/ảnh cao thấp khác nhau), và tự
+                            // fire ngay khi ListView.builder build tới gần
+                            // cuối (Flutter build sẵn vài item nằm trong
+                            // cacheExtent, TRƯỚC KHI card đó thật sự hiện lên
+                            // màn hình) — nên trang tiếp theo gần như luôn có
+                            // sẵn dữ liệu lúc user cuộn tới, khỏi thấy shimmer.
+                            if (hasMore &&
+                                !_loadingMore &&
+                                !loading &&
+                                index >= filtered.length - 3) {
+                              WidgetsBinding.instance.addPostFrameCallback((_) {
+                                if (mounted) fetchProducts();
+                              });
+                            }
+
                             final participants = product['participants'] ?? [];
 
                             final missingIds = participants
@@ -4754,16 +4867,11 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
 
                             final String creatorId = meta['creator_id']?.toString() ?? "0";
 
-                            if (!hostStatsMap.containsKey(creatorId) &&
-                                !_fetchingHostStats.contains(creatorId)) {
-                              _fetchingHostStats.add(creatorId);
-                              WidgetsBinding.instance.addPostFrameCallback((_) {
-                                fetchHostStats(creatorId).then((_) {
-                                  _fetchingHostStats.remove(creatorId);
-                                });
-                              });
-                            }
-
+                            // Host stats giờ được nạp SẴN theo lô cho cả trang
+                            // (fetchHostStatsBulk gọi từ fetchProducts/
+                            // handleNewProduct), không còn tự fetch riêng ở
+                            // đây nữa — tránh mỗi card bắn 1 request song song
+                            // riêng cho từng creator khác nhau trong trang.
                             final userStats = hostStatsMap[creatorId];
                             final String creatorName = product['creatorName'] ?? '...';
                             final String pubName = meta['pub_name']?.toString() ?? "Ẩn danh";

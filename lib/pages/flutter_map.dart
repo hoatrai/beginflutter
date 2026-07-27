@@ -15,6 +15,7 @@ import 'chat_page.dart';
 import 'product_detail_page.dart';
 import 'package:flutter/foundation.dart';
 import '../config/app_config.dart';
+import '../services/app_globals.dart';
 
 IconData getIconByType(String type) {
   switch (type) {
@@ -156,6 +157,7 @@ class _MapPageState extends State<MapPage>
     _onlineChannel?.push("update_presence", {
       "user_id": widget.userId,
       "username": widget.username,
+      "avatar": currentUserAvatar,
       "latitude": _currentPosition!.latitude,
       "longitude": _currentPosition!.longitude,
       "status": status, // 👈 online | background
@@ -700,6 +702,7 @@ out center tags;
       final joinParams = {
         "user_id": userIdInt,
         "username": widget.username.isNotEmpty ? widget.username : "hung",
+        "avatar": currentUserAvatar,
         "latitude": _currentPosition!.latitude,
         "longitude": _currentPosition!.longitude,
       };
@@ -802,6 +805,7 @@ out center tags;
     _onlineChannel?.push("update_presence", {
       "user_id": userIdInt,
       "username": widget.username.isNotEmpty ? widget.username : "Người dùng",
+      "avatar": currentUserAvatar,
       "latitude": _currentPosition!.latitude,
       "longitude": _currentPosition!.longitude,
     });
@@ -823,6 +827,7 @@ out center tags;
 
       presenceUsers[key] = {
         'username': metaInner['username'] ?? 'Người dùng',
+        'avatar': metaInner['avatar'] ?? '', // 👈 thêm: avatar để hiện khi mở chat từ map
         'user_id': key,
         'latitude': parseDouble(metaInner['latitude']),
         'longitude': parseDouble(metaInner['longitude']),
@@ -852,6 +857,7 @@ out center tags;
 
       final meta = metas.first;
       final username = meta['username'] ?? 'Người dùng';
+      final avatar = meta['avatar'] ?? ''; // 👈 thêm
       final lat = parseDouble(meta['latitude']);
       final lng = parseDouble(meta['longitude']);
 
@@ -859,6 +865,7 @@ out center tags;
       presenceUsers[key.toString()] = {
         'user_id': key.toString(),
         'username': username,
+        'avatar': avatar, // 👈 thêm: avatar để hiện khi mở chat từ map
         'latitude': lat,
         'longitude': lng,
         'status': meta['status'] ?? "online",        // 👈 thêm

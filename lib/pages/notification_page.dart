@@ -52,6 +52,13 @@ class _NotificationPageState extends State<NotificationPage> {
 
   @override
   Widget build(BuildContext context) {
+    return ValueListenableBuilder<int>(
+      valueListenable: NotificationStore.revision,
+      builder: (context, _, __) => _buildBody(context),
+    );
+  }
+
+  Widget _buildBody(BuildContext context) {
     final all = NotificationStore.items;
     final unread = all.where((n) => !n.isRead).toList();
     final visible = _tab == 0 ? all : unread;

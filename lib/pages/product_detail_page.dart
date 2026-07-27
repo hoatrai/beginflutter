@@ -172,11 +172,14 @@ class Participant {
 
   factory Participant.fromMap(Map<String, dynamic> m) => Participant(
     userId:           int.tryParse(m['user_id']?.toString() ?? '') ?? 0,
-    name:             m['display_name']?.toString() ?? '',
+    name:             (m['display_name'] ?? m['name'])?.toString() ?? '',
     status:           m['status']?.toString() ?? '',
     role:             m['role']?.toString() ?? '',
     attendanceStatus: AttendanceStatusExt.fromKey(m['attendance_status']?.toString()),
     trustScore:       int.tryParse(m['trust_score']?.toString() ?? '') ?? 50,
+    // 🆕 invite/detail giờ trả sẵn avatar_url (JOIN thẳng ở backend), khỏi
+    // phải chờ round-trip enrich riêng nữa — xem _fetchParticipants().
+    avatar:           m['avatar_url']?.toString(),
     isRated:          m['is_rated'] == 1,
     myRating:         m['my_rating'] != null ? int.tryParse(m['my_rating'].toString()) : null,
   );
@@ -285,6 +288,8 @@ class _ProductDetailPageState extends State<ProductDetailPage>
   bool _isUploadingMedia       = false;
   bool _isUpdatingAttendance   = false;
   bool _isUpdatingInviteStatus = false;
+  // 🆕 Bật/tắt hiệu ứng pháo hoa khi check-in "Đã tới" thành công.
+  bool _showCheckinFirework    = false;
   // 🔧 FIX: theo dõi danh sách URL video đã init lần gần nhất, thay cho cờ
   // boolean cũ chỉ cho phép init MỘT LẦN trong suốt vòng đời State.
   List<String> _initedVideoUrls = [];
@@ -318,6 +323,54 @@ class _ProductDetailPageState extends State<ProductDetailPage>
         ? (widget.product['category_names']?.toString() ?? '')
         : catNames;
     return _getCategoryActivityLabel(fallback);
+  }
+
+  // ── 🆕 TRẠNG THÁI "ĐANG DIỄN RA" ─────────────────────────────────────────
+  // Cùng logic parse + ngưỡng với isLive/isSoon bên shop_page.dart (card
+  // ngoài list), để badge "🔥 Đang diễn ra" ở card và trang chi tiết luôn
+  // đồng bộ — tránh trường hợp card báo live nhưng bấm vào detail lại thấy
+  // giao diện y hệt lúc chưa diễn ra.
+  //
+  // Backend hiện KHÔNG có field "giờ kết thúc" riêng cho invite (chỉ có
+  // giờ bắt đầu ở meta 'time') nên "đang diễn ra" được suy ra là: đã qua
+  // giờ bắt đầu nhưng chưa quá 24h — không có đếm ngược chính xác tới giờ
+  // hết hạn thật, vì dữ liệu đó chưa tồn tại ở phía server cho invite.
+  bool get _isLive {
+    final metaData = widget.product['meta_data'] as List<dynamic>? ?? [];
+    String? timeStr;
+    for (final item in metaData) {
+      if (item['key'] == 'time') {
+        timeStr = item['value']?.toString();
+        break;
+      }
+    }
+    if (timeStr == null || timeStr.isEmpty) return false;
+    try {
+      final eventTime = DateFormat("dd/MM/yyyy HH:mm").parse(timeStr);
+      final diff = eventTime.difference(DateTime.now());
+      return diff.isNegative && diff.abs().inHours < 24;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  // Số người ĐÃ THỰC SỰ CÓ MẶT (check-in "Đã tới"), khác với joinedCount
+  // (chỉ là số người đã đăng ký/join phòng) — quan trọng hơn nhiều khi
+  // đang diễn ra vì cho biết ai thật sự đang ở bàn.
+  int get _goingCount =>
+      _participants.where((p) => p.attendanceStatus == AttendanceStatus.going).length;
+
+  // Chính người dùng hiện tại đã check-in "Đã tới" chưa — dùng để quyết
+  // định có cần đẩy nút check-in lên nổi bật hay không (đã tới rồi thì
+  // khỏi cần giục nữa).
+  bool get _hasCheckedIn => _participants.any(
+        (p) => p.userId == _currentUserId && p.attendanceStatus == AttendanceStatus.going,
+  );
+
+  // Khuya (22h - 5h) VÀ đang diễn ra -> nhắc nhở an toàn nhẹ nhàng.
+  bool get _isLateNight {
+    final h = DateTime.now().hour;
+    return h >= 22 || h < 5;
   }
 
   // ── Video ──────────────────────────────────────────────────────────────────
@@ -787,7 +840,6 @@ class _ProductDetailPageState extends State<ProductDetailPage>
           .map((m) => Participant.fromMap(m as Map<String, dynamic>))
           .toList();
 
-      await _enrichWithAvatars(parsed);
       if (!mounted) return;
 
       setState(() {
@@ -806,6 +858,23 @@ class _ProductDetailPageState extends State<ProductDetailPage>
         'id': widget.product['id'],
         'joined_count': joinedCount,
       });
+
+      // 🆕 FIX PERFORMANCE: avatar giờ đã có sẵn trong `parsed` (backend
+      // trả kèm avatar_url trong CÙNG request invite/detail ở trên), nên
+      // participant card hiện NGAY, không còn phải đợi thêm 1 round-trip
+      // riêng chỉ để tô avatar nữa.
+      //
+      // _enrichWithAvatars() giờ chỉ là lớp dự phòng — chạy KHÔNG chặn UI
+      // (không await ở đây), và bên trong nó cũng chỉ hỏi cho những user
+      // nào thật sự còn thiếu avatar_url (vd: server cũ chưa deploy bản
+      // JOIN mới). Trường hợp bình thường (đã deploy đủ), danh sách rỗng
+      // -> hàm return ngay, không tốn request nào.
+      final missingAvatar = parsed.where((p) => (p.avatar ?? '').isEmpty).toList();
+      if (missingAvatar.isNotEmpty) {
+        _enrichWithAvatars(missingAvatar).then((_) {
+          if (mounted) setState(() {});
+        });
+      }
     } catch (e) {
       debugPrint('❌ _fetchParticipants: $e');
     }
@@ -1130,6 +1199,14 @@ class _ProductDetailPageState extends State<ProductDetailPage>
       // chỉ tin phép tính khoảng cách phía client) — chốt bảo mật thật
       // nằm ở nhau_update_attendance_status() bên PHP.
       await _updateAttendance(AttendanceStatus.going, lat: pos.latitude, lng: pos.longitude);
+
+      // 🆕 _updateAttendance() chỉ set attendanceStatus = going trong
+      // setState khi server trả success -> _hasCheckedIn đúng nghĩa là
+      // "vừa check-in thành công", nên dùng nó để quyết định có bắn pháo
+      // hoa hay không (không bắn nếu API lỗi/GPS bị chặn ở trên).
+      if (_hasCheckedIn && mounted) {
+        setState(() => _showCheckinFirework = true);
+      }
     } catch (e) {
       _showSnack('❌ Không lấy được vị trí, thử lại: $e');
     } finally {
@@ -1579,10 +1656,23 @@ class _ProductDetailPageState extends State<ProductDetailPage>
                                 _buildHeaderRow(name, _priceText(priceRange)),
                                 const SizedBox(height: 16),
 
+                                // 🆕 Khi đang diễn ra: đẩy check-in + "khoảnh khắc"
+                                // (feed ảnh/video real-time) lên đầu, đúng lúc cần
+                                // dùng nhất là lúc đang ngồi bàn — thay vì phải kéo
+                                // xuống mới thấy như bố cục mặc định lúc chưa diễn ra.
+                                if (_isLive) ...[
+                                  _buildLiveCheckinBanner(),
+                                  const SizedBox(height: 16),
+                                  _buildMediaSection(),
+                                  const SizedBox(height: 16),
+                                ],
+
                                 _buildParticipantsSection(),
                                 const SizedBox(height: 16),
-                                _buildMediaSection(),
-                                const SizedBox(height: 16),
+                                if (!_isLive) ...[
+                                  _buildMediaSection(),
+                                  const SizedBox(height: 16),
+                                ],
                                 _buildActionRow(),
                                 const SizedBox(height: 16),
                                 _buildInfoCard(metaData, description),
@@ -1600,6 +1690,20 @@ class _ProductDetailPageState extends State<ProductDetailPage>
               ),
             ),
           ),
+
+          // 🆕 Hiệu ứng pháo hoa khi check-in "Đã tới" thành công — overlay
+          // full-screen, không chặn thao tác (IgnorePointer), tự ẩn sau khi
+          // animation chạy xong (xem _CheckinFireworkOverlay).
+          if (_showCheckinFirework)
+            Positioned.fill(
+              child: IgnorePointer(
+                child: _CheckinFireworkOverlay(
+                  onDone: () {
+                    if (mounted) setState(() => _showCheckinFirework = false);
+                  },
+                ),
+              ),
+            ),
         ],
       ),
     );
@@ -1712,6 +1816,44 @@ class _ProductDetailPageState extends State<ProductDetailPage>
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              // 🆕 Badge "Đang diễn ra" — đồng bộ với badge 🔥 ở card ngoài
+              // list (shop_page.dart), để không bị "lạc" giao diện khi bấm
+              // vào detail lúc kèo đang live.
+              if (_isLive) ...[
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                  decoration: BoxDecoration(
+                    gradient: const LinearGradient(
+                      colors: [Color(0xFFFF3B30), Color(0xFFFF7043)],
+                    ),
+                    borderRadius: BorderRadius.circular(100),
+                    boxShadow: [
+                      BoxShadow(
+                        color: const Color(0xFFFF3B30).withOpacity(0.45),
+                        blurRadius: 8,
+                        spreadRadius: 1,
+                      ),
+                    ],
+                  ),
+                  child: const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      _DetailPulsingDot(),
+                      SizedBox(width: 5),
+                      Text(
+                        'ĐANG DIỄN RA',
+                        style: TextStyle(
+                          fontSize: 10,
+                          color: Colors.white,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: 0.5,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 8),
+              ],
               Text(
                 name,
                 style: const TextStyle(
@@ -1758,11 +1900,9 @@ class _ProductDetailPageState extends State<ProductDetailPage>
       return Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
         decoration: BoxDecoration(
-          color: Colors.redAccent.withOpacity(0.9),
+          color: Colors.redAccent.withOpacity(0.16),
           borderRadius: BorderRadius.circular(20),
-          boxShadow: const [
-            BoxShadow(color: Colors.black26, blurRadius: 4, offset: Offset(0, 2))
-          ],
+          border: Border.all(color: Colors.redAccent.withOpacity(0.5)),
         ),
         child: const Text('Đã đóng',
             style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12)),
@@ -1773,11 +1913,9 @@ class _ProductDetailPageState extends State<ProductDetailPage>
       return Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
         decoration: BoxDecoration(
-          color: Colors.orangeAccent.withOpacity(0.9),
+          color: Colors.orangeAccent.withOpacity(0.16),
           borderRadius: BorderRadius.circular(20),
-          boxShadow: const [
-            BoxShadow(color: Colors.black26, blurRadius: 4, offset: Offset(0, 2))
-          ],
+          border: Border.all(color: Colors.orangeAccent.withOpacity(0.5)),
         ),
         child: const Text('Đã đủ người',
             style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12)),
@@ -1790,16 +1928,9 @@ class _ProductDetailPageState extends State<ProductDetailPage>
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
         decoration: BoxDecoration(
-          color: Colors.green.withOpacity(0.9),
+          color: Colors.green.withOpacity(0.16),
           borderRadius: BorderRadius.circular(20),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.green.withOpacity(0.4),
-              blurRadius: 8,
-              spreadRadius: 1,
-              offset: const Offset(0, 2),
-            )
-          ],
+          border: Border.all(color: Colors.greenAccent.withOpacity(0.5)),
         ),
         child: const Text('Đang mở',
             style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12)),
@@ -1836,6 +1967,25 @@ class _ProductDetailPageState extends State<ProductDetailPage>
                 ),
             ],
           ),
+          // 🆕 Khi đang diễn ra: số người ĐÃ THỰC SỰ CÓ MẶT quan trọng hơn số
+          // đã đăng ký — tổng hợp từ AttendanceStatus.going (check-in GPS).
+          if (_isLive && !_isLoadingJoin) ...[
+            const SizedBox(height: 6),
+            Row(
+              children: [
+                const Icon(Icons.flag_rounded, color: Color(0xFFFF7043), size: 14),
+                const SizedBox(width: 5),
+                Text(
+                  '$_goingCount/$joinedCount đã tới',
+                  style: const TextStyle(
+                    color: Color(0xFFFF7043),
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ),
+          ],
           const SizedBox(height: 14),
           if (_isLoadingJoin)
             _shimmerParticipants()
@@ -1926,7 +2076,7 @@ class _ProductDetailPageState extends State<ProductDetailPage>
                                 color: Colors.orangeAccent, size: 16),
                             SizedBox(width: 4),
                             Text(
-                              'Xem tất cả',
+                              'Newsfeed',
                               style: TextStyle(
                                 color: Colors.orangeAccent,
                                 fontSize: 12,
@@ -2145,6 +2295,132 @@ class _ProductDetailPageState extends State<ProductDetailPage>
   }
 
   // ==========================================================================
+  // 🆕 LIVE CHECK-IN BANNER (chỉ hiện khi kèo đang diễn ra)
+  // ==========================================================================
+  //
+  // Đẩy hành động quan trọng nhất lúc đang ngồi bàn — xác nhận có mặt +
+  // vào trò chơi — lên ngay đầu trang, thay vì để lẫn trong _buildActionRow
+  // (vốn còn có "Đóng bàn"/"Mở lại bàn" của host, dễ bị bỏ qua). Chỉ hiện
+  // cho người đã join hoặc là host; khách vãng lai xem kèo live nhưng chưa
+  // tham gia thì không có gì để check-in nên không hiện.
+  Widget _buildLiveCheckinBanner() {
+    final bool canCheckin = isJoined || isHost;
+    if (!canCheckin) return const SizedBox.shrink();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (!_hasCheckedIn)
+          _isUpdatingAttendance
+              ? shimmer.Shimmer.fromColors(
+            baseColor: const Color(0xFFFF7043).withOpacity(0.10),
+            highlightColor: const Color(0xFFFF7043).withOpacity(0.35),
+            child: Container(
+              width: double.infinity,
+              height: 50,
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(18),
+              ),
+            ),
+          )
+              : GestureDetector(
+            onTap: _checkinWithGps,
+            onLongPress: _showAttendancePicker,
+            child: Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 18),
+              decoration: BoxDecoration(
+                // 🆕 Đổi từ gradient đỏ-cam đặc (chói, dễ lấn át nội dung
+                // khác) sang kiểu "kính mờ" trong suốt — vẫn nổi bật nhờ
+                // viền + icon/chữ màu san hô, nhưng dịu mắt hơn nhiều.
+                color: const Color(0xFFFF7043).withOpacity(0.16),
+                borderRadius: BorderRadius.circular(18),
+                border: Border.all(color: const Color(0xFFFF7043).withOpacity(0.55)),
+              ),
+              child: const Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.flag_rounded, color: Color(0xFFFF7043), size: 20),
+                  SizedBox(width: 10),
+                  Text(
+                    'Xác nhận đã tới (check-in)',
+                    style: TextStyle(
+                      color: Color(0xFFFF7043),
+                      fontWeight: FontWeight.w800,
+                      fontSize: 15,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          )
+        else
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+            decoration: BoxDecoration(
+              color: Colors.green.withOpacity(0.15),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: Colors.green.withOpacity(0.4)),
+            ),
+            child: const Row(
+              children: [
+                Icon(Icons.check_circle_rounded, color: Colors.greenAccent, size: 20),
+                SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Bạn đã check-in — chúc vui vẻ! 🍻',
+                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 13.5),
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+        const SizedBox(height: 10),
+
+        // 🆕 Trò chơi bàn nhậu — đúng lúc cần dùng nhất là lúc đang ngồi bàn,
+        // nên đưa lên ngay đây thay vì chỉ nằm trong _buildActionRow phía dưới.
+        Center(
+          child: _ChipButton(
+            label: 'Trò chơi bàn nhậu 🎲',
+            icon: Icons.sports_bar_rounded,
+            onTap: _openGameMenu,
+            outlined: true,
+          ),
+        ),
+
+        // 🆕 Nhắc nhở an toàn nhẹ nhàng khi khuya + đang diễn ra — phù hợp
+        // trách nhiệm của 1 app nhậu, không chặn hành động nào của user.
+        if (_isLateNight) ...[
+          const SizedBox(height: 10),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.05),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: const Row(
+              children: [
+                Icon(Icons.nightlight_round, color: Colors.amberAccent, size: 16),
+                SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Đã khuya rồi — uống có kiểm soát và nhớ đặt xe về an toàn nhé.',
+                    style: TextStyle(color: Colors.white70, fontSize: 12.5),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  // ==========================================================================
   // ACTION ROW (host controls + attendance)
   // ==========================================================================
 
@@ -2158,7 +2434,10 @@ class _ProductDetailPageState extends State<ProductDetailPage>
         // 🆕 "Đã tới" là hành động chính (check-in) -> giữ nút gradient nổi
         // bật, các nút còn lại chuyển sang dạng outline nhỏ gọn hơn để đỡ
         // rối mắt và làm rõ đâu là hành động quan trọng nhất.
-        if (isJoined) ...[
+        // Khi đang diễn ra (_isLive), nút check-in + trò chơi đã được đẩy
+        // lên _buildLiveCheckinBanner() ngay đầu trang rồi -> ẩn ở đây để
+        // không lặp lại 2 lần cùng 1 hành động trên cùng 1 trang.
+        if (isJoined && !_isLive) ...[
           _isUpdatingAttendance
               ? _shimmerChip()
               : _ChipButton(
@@ -2179,7 +2458,7 @@ class _ProductDetailPageState extends State<ProductDetailPage>
             outlined: true,
           ),
         ],
-        if (isJoined) ...[
+        if (isJoined && !_isLive) ...[
           _ChipButton(
             label: 'Trò chơi',
             icon: Icons.sports_bar_rounded,
@@ -3541,6 +3820,195 @@ class _ActionButtonState extends State<_ActionButton> {
   }
 }
 
+// 🆕 Chấm nhấp nháy cho badge "ĐANG DIỄN RA" ở header trang chi tiết —
+// bản sao nhỏ của _PulsingDot bên shop_page.dart (không import được vì
+// class đó private theo library/file, không phải theo class).
+class _DetailPulsingDot extends StatefulWidget {
+  const _DetailPulsingDot();
+
+  @override
+  State<_DetailPulsingDot> createState() => _DetailPulsingDotState();
+}
+
+class _DetailPulsingDotState extends State<_DetailPulsingDot> {
+  bool _grow = true;
+
+  @override
+  Widget build(BuildContext context) {
+    return TweenAnimationBuilder<double>(
+      tween: Tween(begin: _grow ? 0.55 : 1.0, end: _grow ? 1.0 : 0.55),
+      duration: const Duration(milliseconds: 700),
+      onEnd: () {
+        if (mounted) setState(() => _grow = !_grow);
+      },
+      builder: (context, scale, child) {
+        return Opacity(
+          opacity: scale,
+          child: Transform.scale(scale: scale, child: child),
+        );
+      },
+      child: Container(
+        width: 6,
+        height: 6,
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          shape: BoxShape.circle,
+        ),
+      ),
+    );
+  }
+}
+
+// =============================================================================
+// 🆕 CHECK-IN FIREWORK OVERLAY
+// =============================================================================
+// Hiệu ứng pháo hoa nhẹ khi user check-in "Đã tới" thành công. Tự vẽ bằng
+// CustomPainter (không thêm package ngoài nào) — 3 đợt nổ so le thời gian ở
+// vài vị trí trên màn hình, mỗi đợt là các hạt màu bắn ra từ tâm rồi rơi/mờ
+// dần. Tự gọi onDone() khi animation kết thúc để widget cha ẩn overlay đi.
+class _FireworkParticle {
+  final Offset originFraction; // vị trí tâm nổ, tính theo tỉ lệ (0-1) của size màn hình
+  final double angle;
+  final double speed; // bán kính tối đa hạt bay ra được (px)
+  final Color color;
+  final double radius;
+  final double startT; // thời điểm bắt đầu (0-1, theo animation tổng)
+  final double endT;   // thời điểm hạt tắt hẳn (0-1)
+
+  _FireworkParticle({
+    required this.originFraction,
+    required this.angle,
+    required this.speed,
+    required this.color,
+    required this.radius,
+    required this.startT,
+    required this.endT,
+  });
+}
+
+class _CheckinFireworkOverlay extends StatefulWidget {
+  final VoidCallback onDone;
+  const _CheckinFireworkOverlay({required this.onDone});
+
+  @override
+  State<_CheckinFireworkOverlay> createState() => _CheckinFireworkOverlayState();
+}
+
+class _CheckinFireworkOverlayState extends State<_CheckinFireworkOverlay>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+  late final List<_FireworkParticle> _particles;
+
+  static const _palette = [
+    Color(0xFFFF7043), // san hô — đồng bộ màu accent check-in
+    Color(0xFFFFC107), // vàng hổ phách
+    Color(0xFF4CAF50), // xanh lá
+    Color(0xFF29B6F6), // xanh dương nhạt
+    Color(0xFFEC407A), // hồng
+    Colors.white,
+  ];
+
+  @override
+  void initState() {
+    super.initState();
+    _particles = _generateParticles();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1600),
+    )..addStatusListener((status) {
+      if (status == AnimationStatus.completed) {
+        widget.onDone();
+      }
+    });
+    _controller.forward();
+  }
+
+  List<_FireworkParticle> _generateParticles() {
+    final rand = Random();
+    // 3 đợt nổ so le — vị trí ngẫu nhiên ở nửa trên màn hình, thời điểm
+    // bắt đầu lệch nhau để trông như 1 màn pháo hoa thật thay vì nổ 1 phát.
+    final bursts = [
+      (dx: 0.5, dy: 0.30, start: 0.0),
+      (dx: 0.25, dy: 0.42, start: 0.18),
+      (dx: 0.75, dy: 0.38, start: 0.32),
+    ];
+
+    final particles = <_FireworkParticle>[];
+    for (final burst in bursts) {
+      final count = 22 + rand.nextInt(8);
+      for (int i = 0; i < count; i++) {
+        final angle = rand.nextDouble() * 2 * pi;
+        particles.add(_FireworkParticle(
+          originFraction: Offset(burst.dx, burst.dy),
+          angle: angle,
+          speed: 55 + rand.nextDouble() * 85,
+          color: _palette[rand.nextInt(_palette.length)],
+          radius: 2 + rand.nextDouble() * 2.2,
+          startT: burst.start,
+          endT: (burst.start + 0.62).clamp(0.0, 1.0),
+        ));
+      }
+    }
+    return particles;
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (context, _) {
+        return CustomPaint(
+          size: Size.infinite,
+          painter: _FireworkPainter(particles: _particles, t: _controller.value),
+        );
+      },
+    );
+  }
+}
+
+class _FireworkPainter extends CustomPainter {
+  final List<_FireworkParticle> particles;
+  final double t;
+
+  _FireworkPainter({required this.particles, required this.t});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()..style = PaintingStyle.fill;
+
+    for (final p in particles) {
+      if (t < p.startT || t > p.endT) continue;
+
+      final span = (p.endT - p.startT).clamp(0.0001, 1.0);
+      final localT = ((t - p.startT) / span).clamp(0.0, 1.0);
+
+      // Bán kính bay ra chậm dần (easeOut), thêm chút rơi xuống theo trọng
+      // lực để giống pháo hoa thật hơn là nổ tròn đều vô hồn.
+      final eased = Curves.easeOut.transform(localT);
+      final dist = p.speed * eased;
+      final gravityDrop = 40 * localT * localT;
+
+      final dx = p.originFraction.dx * size.width + cos(p.angle) * dist;
+      final dy = p.originFraction.dy * size.height + sin(p.angle) * dist + gravityDrop;
+
+      final opacity = (1 - localT).clamp(0.0, 1.0);
+      if (opacity <= 0) continue;
+
+      paint.color = p.color.withOpacity(opacity);
+      canvas.drawCircle(Offset(dx, dy), p.radius * (1 - localT * 0.35), paint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _FireworkPainter oldDelegate) => oldDelegate.t != t;
+}
+
 class _ChipButton extends StatelessWidget {
   final String label;
   final IconData icon;
@@ -3843,30 +4311,44 @@ class _ParticipantCard extends StatelessWidget {
                 ),
               ),
             // Trust score badge
+            // 🆕 FIX: trước đây LUÔN xanh lá bất kể điểm cao/thấp — không
+            // phản ánh đúng ý nghĩa "uy tín", nhìn vào không phân biệt được
+            // user điểm 90 hay điểm 10. Giờ màu đổi theo mức điểm (xanh lá
+            // ≥70, cam 40-69, đỏ <40) và chuyển sang kiểu trong suốt/viền
+            // thay vì nền đặc, đỡ chói trên avatar.
             Positioned(
               bottom: -4,
               right: -4,
-              child: Container(
-                padding: const EdgeInsets.symmetric(
-                    horizontal: 4, vertical: 2),
-                decoration: BoxDecoration(
-                  color: Colors.green,
-                  borderRadius: BorderRadius.circular(8),
-                  border:
-                  Border.all(color: Colors.white, width: 1),
-                ),
-                child: Text(
-                  '${participant.trustScore}',
-                  style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 9,
-                      fontWeight: FontWeight.bold),
-                ),
-              ),
+              child: Builder(builder: (_) {
+                final score = participant.trustScore;
+                final Color scoreColor = score >= 70
+                    ? Colors.greenAccent
+                    : (score >= 40 ? Colors.orangeAccent : Colors.redAccent);
+                return Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 4, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: scoreColor.withOpacity(0.18),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: scoreColor.withOpacity(0.75), width: 1),
+                  ),
+                  child: Text(
+                    '$score',
+                    style: TextStyle(
+                        color: scoreColor,
+                        fontSize: 9,
+                        fontWeight: FontWeight.bold),
+                  ),
+                );
+              }),
             ),
           ],
         ),
       ),
+      // 🆕 Avatar có badge điểm trust_score tràn xuống dưới (bottom: -4),
+      // nên cần chừa khoảng cách rõ ràng ở đây, không thì tên bị đè/dính
+      // sát ngay dưới badge đó.
+      const SizedBox(height: 8),
       // Tên
       SizedBox(
         width: 64,
@@ -3877,6 +4359,7 @@ class _ParticipantCard extends StatelessWidget {
           style: const TextStyle(color: Colors.white70, fontSize: 11),
         ),
       ),
+      const SizedBox(height: 4),
       isUpdatingAttendance
           ? _AttendanceShimmer()
           : _AttendanceBadge(status: participant.attendanceStatus),
