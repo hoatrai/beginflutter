@@ -1083,7 +1083,7 @@ out center tags;
           statusText = "Offline";
           break;
         default:
-          statusColor = const Color(0xFF14B8A6); // teal - "Online"
+          statusColor = const Color(0xFF06B6D4); // teal - "Online"
           statusText = "Online";
       }
 
@@ -1162,16 +1162,21 @@ out center tags;
                 Positioned(
                   bottom: 55,
                   child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
                     decoration: BoxDecoration(
-                      color: statusColor.withOpacity(0.7),
+                      color: statusColor, // 👈 SỬA: bỏ withOpacity(0.7) -> đặc màu như marker "Tôi", không bị chìm vào nền map nữa
                       borderRadius: BorderRadius.circular(6),
+                      border: Border.all(color: Colors.white, width: 1), // 👈 THÊM: viền trắng mỏng để tách khỏi nền bản đồ
+                      boxShadow: const [
+                        BoxShadow(color: Colors.black38, blurRadius: 4, offset: Offset(0, 1)), // 👈 THÊM: đổ bóng cho nổi khối
+                      ],
                     ),
                     child: Text(
                       "${user['username'] ?? 'Unknown'} • $statusText",
                       style: const TextStyle(
                         color: Colors.white,
                         fontSize: 10,
+                        fontWeight: FontWeight.w600, // 👈 THÊM: đậm hơn cho dễ đọc
                       ),
                     ),
                   ),

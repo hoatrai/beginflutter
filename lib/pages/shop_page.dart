@@ -94,6 +94,11 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
   int page = 1;
   int myUserId = 0; // khai báo int
   bool hasMore = true;
+  // 🆕 FIX vòng lặp fetchProducts: chốt lại chỉ bắn prefetch 1 LẦN cho mỗi
+  // trang đang tải hiện tại, thay vì bắn lại mỗi khi itemBuilder rebuild
+  // các item "gần cuối" (dễ xảy ra vô hạn khi list ngắn, vì mọi item đều
+  // rơi vào điều kiện index >= filtered.length - 3).
+  bool _prefetchTriggeredForPage = false;
   bool _isNavigating = false;
   Map<String, String> creatorAvatars = {};
   Map<String, String> participantAvatars = {};
@@ -358,7 +363,16 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
                 selectedCategory = null;
                 products.clear();
                 page = 1;
+                _prefetchTriggeredForPage = false;
                 hasMore = true;
+                loading = true;
+                // 🆕 FIX: nếu request load-more trước đó (page cũ) đang
+                // treo/chưa xong, _loadingMore vẫn = true -> guard đầu
+                // fetchProducts() sẽ chặn request mới này, khiến bấm tab
+                // không có tác dụng gì (spinner đứng nguyên trạng thái cũ).
+                // Reset lại đây để tab luôn gọi được request mới.
+                _loadingMore = false;
+                _emptyPageCount = 0;
               });
               fetchProducts();
             },
@@ -399,7 +413,14 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
                   selectedCategory = f['value'];
                   products.clear();
                   page = 1;
+                  _prefetchTriggeredForPage = false;
                   hasMore = true;
+                  loading = true;
+                  // 🆕 FIX: xem giải thích ở nút "Tất cả" phía trên — không
+                  // reset thì tab bị guard (_loadingMore) chặn nếu request
+                  // trước đó chưa xong.
+                  _loadingMore = false;
+                  _emptyPageCount = 0;
                 });
                 fetchProducts();
               },
@@ -700,6 +721,7 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
     if (products.isEmpty) {
       setState(() {
         page = 1;
+        _prefetchTriggeredForPage = false;
         hasMore = true;
         _emptyPageCount = 0;
       });
@@ -827,6 +849,7 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
       // refresh lại danh sách theo vị trí mới chính xác hơn
       setState(() {
         page = 1;
+        _prefetchTriggeredForPage = false;
         hasMore = true;
         products.clear();
       });
@@ -1660,6 +1683,12 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
     }
   }
 
+  // 🆕 Đã chuyển toàn bộ logic sort "live đông người -> live -> sắp diễn
+  // ra -> chưa tới" qua backend (xem filter nhau_apply_keo_priority_sort
+  // trong file PHP mới `keo-priority-sort.php`, áp dụng khi request có
+  // ?nhau_sort=keo_priority). fetchProducts() giờ chỉ hiển thị đúng thứ
+  // tự mà API đã trả về, không tự sort lại ở Flutter nữa.
+
   bool isExpiredInvite(String timeString) {
     try {
       final targetTime = DateFormat("dd/MM/yyyy HH:mm").parse(timeString);
@@ -1710,6 +1739,13 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
         "${AppConfig.webDomain}/wp-json/wc/v3/products"
             "?status=publish&per_page=10&page=$page"
             "&orderby=date&order=desc"
+        // 🆕 Yêu cầu backend tự sort theo tiêu chí "live đông người ->
+        // live -> sắp diễn ra -> chưa tới" (xem filter
+        // nhau_apply_keo_priority_sort trong keo-priority-sort.php).
+        // Chỉ khi có param này backend mới đổi thứ tự — các chỗ khác
+        // trong app gọi thẳng wc/v3/products (vd. _loadInvites()) không
+        // truyền param này nên không bị ảnh hưởng.
+            "&nhau_sort=keo_priority"
         // 🚀 CHỈ lấy field cần dùng ở shop page thay vì cả schema WC
         // (description, attributes, variations, links...) → JSON nhẹ
         // hơn đáng kể, parse nhanh hơn, tốn ít băng thông hơn.
@@ -1730,7 +1766,13 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
             "&consumer_secret=cs_a49b903ddc7972646359f360d79343cd1e33b6f8",
       );*/
 
-      final response = await http.get(url);
+      // 🆕 FIX: có timeout để KHÔNG treo loading vô thời hạn nếu backend
+      // chậm/đứng (vd. lúc keo-priority-sort phải tính lại toàn bộ danh
+      // sách). Timeout xong sẽ rơi vào catch bên dưới -> loading=false,
+      // hasError=true, thay vì spinner đứng mãi không có điểm dừng.
+      final response = await http
+          .get(url)
+          .timeout(const Duration(seconds: 12));
 
       if (response.statusCode != 200) {
         setState(() {
@@ -1799,40 +1841,53 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
         parsedProducts.add(productMap);
       }
 
-      // Sort chỉ trang mới
-      parsedProducts.sort((a, b) {
-        final d1 = (a['distanceKm'] as double?) ?? 9999;
-        final d2 = (b['distanceKm'] as double?) ?? 9999;
-        return d1.compareTo(d2);
-      });
+      // ❌ Đã bỏ sort theo priority (live/hot/sắp diễn ra) theo yêu cầu —
+      // giữ nguyên thứ tự trả về từ API (orderby=date&order=desc).
+      // parsedProducts.sort(_compareKeoOrder);
 
       List<dynamic> newOnesForThisPage = [];
+
+      // 🔧 FIX: tính TRƯỚC xem trang này có bị lọc rỗng (còn API vẫn còn
+      // data) hay không -> nếu có, sắp có 1 lần fetchProducts() tự động
+      // gọi lại ngay sau đây. Biết trước điều này để KHÔNG tắt `loading`
+      // trong lúc chờ retry, tránh việc UI chớp qua _buildEmptyState()
+      // ("Chưa có kèo nào gần bạn") rồi lại quay về loading ngay sau đó.
+      final bool pageFilteredEmpty = parsedProducts.isEmpty && apiHasMore;
+      final int nextEmptyPageCount = pageFilteredEmpty ? _emptyPageCount + 1 : 0;
+      final bool willAutoRetry = pageFilteredEmpty && nextEmptyPageCount < 3;
+
       setState(() {
         final existingIds = products.map((p) => p['id']).toSet();
         final newOnes = parsedProducts.where((p) => !existingIds.contains(p['id'])).toList();
         newOnesForThisPage = newOnes; // 🆕 giữ lại để chỉ check status cho đúng trang này
         products.addAll(newOnes);
-        loading = false;
-        _loadingMore = false;
-        hasMore = apiHasMore;
+        // ❌ Đã bỏ sort lại toàn bộ list theo yêu cầu — giữ nguyên thứ tự
+        // các trang được nối vào (theo ngày tạo, mới nhất trước, đúng
+        // như API trả về).
+        // products.sort(_compareKeoOrder);
+
+        // 🔧 FIX: chỉ tắt loading khi thực sự đã xong (không còn retry nào
+        // sắp chạy) — nếu không sẽ có 1 frame products rỗng + loading=false
+        // -> hiện nhầm empty state trước khi trang kế tiếp có data.
+        if (!willAutoRetry) {
+          loading = false;
+          _loadingMore = false;
+        }
+        // Nếu đã lọc rỗng 3 lần liên tiếp (nextEmptyPageCount >= 3) thì coi
+        // như thực sự hết data -> hasMore = false. Ngược lại giữ theo API.
+        hasMore = (pageFilteredEmpty && !willAutoRetry) ? false : apiHasMore;
         hasError = false; // 🆕 fetch thành công thì clear error
         if (apiHasMore) page++;
+        _prefetchTriggeredForPage = false; // 🆕 mở khóa để trang kế tiếp được phép prefetch
+        _emptyPageCount = nextEmptyPageCount;
       });
 
       debugPrint("✅ parsedProducts.length = ${parsedProducts.length}, apiHasMore=$apiHasMore, page=$page");
 
-// ✅ Nếu trang này filter ra 0 nhưng API còn data → tự fetch trang tiếp
-      if (parsedProducts.isEmpty && apiHasMore) {
-        _emptyPageCount++;
-        if (_emptyPageCount >= 3) {
-          setState(() => hasMore = false);
-          _emptyPageCount = 0;
-          return; // ← dừng hẳn, không fetch tiếp
-        }
+      // ✅ Nếu trang này filter ra 0 nhưng API còn data → tự fetch trang tiếp
+      if (willAutoRetry) {
         await Future.delayed(const Duration(milliseconds: 300));
         if (mounted && hasMore) fetchProducts();
-      } else {
-        _emptyPageCount = 0;
       }
 
       // Fetch creator + invite sau khi UI hiện
@@ -2830,6 +2885,7 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
                 setState(() {
                   hasError = false;
                   page = 1;
+                  _prefetchTriggeredForPage = false;
                   hasMore = true;
                 });
                 fetchProducts();
@@ -2877,6 +2933,7 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
   Future<void> _handleRefresh() async {
     setState(() {
       page = 1;
+      _prefetchTriggeredForPage = false;
       hasMore = true;
       hasError = false;
       _emptyPageCount = 0;
@@ -4510,6 +4567,14 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
       });
 
       debugPrint("✅ filterClosedProducts done, còn lại ${products.length} kèo");
+
+      // 🔧 FIX: nếu lọc xong làm rỗng SẠCH danh sách (toàn bộ kèo của (các)
+      // trang đã tải đều bị đóng) nhưng API vẫn còn trang kế tiếp (hasMore),
+      // tự động fetch tiếp ngay — nếu không, UI sẽ đứng im ở empty state
+      // ("Chưa có kèo nào gần bạn") dù thực ra vẫn còn kèo khác chưa tải.
+      if (mounted && products.isEmpty && hasMore && !loading && !_loadingMore) {
+        fetchProducts();
+      }
     } catch (e) {
       debugPrint("❌ filterClosedProducts error: $e");
     }
@@ -4742,12 +4807,12 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
               const SizedBox(height: 10),
               // List sản phẩm
               Expanded(
-                child: loading && products.isEmpty
+                child: (loading || (_loadingMore && products.isEmpty)) && products.isEmpty
                     ? ListView.builder(
                   itemCount: 5,
                   itemBuilder: (context, index) => buildInitialLoadingItem(),
                 )
-                    : (!loading && products.isEmpty)
+                    : (!loading && !_loadingMore && products.isEmpty)
                     ? RefreshIndicator(
                   onRefresh: _handleRefresh,
                   color: Colors.orange,
@@ -4820,7 +4885,9 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
                             if (hasMore &&
                                 !_loadingMore &&
                                 !loading &&
+                                !_prefetchTriggeredForPage &&
                                 index >= filtered.length - 3) {
+                              _prefetchTriggeredForPage = true; // 🆕 chốt, khỏi bắn lại
                               WidgetsBinding.instance.addPostFrameCallback((_) {
                                 if (mounted) fetchProducts();
                               });
@@ -5440,6 +5507,17 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
                                                       color: Colors.white,
                                                       height: 1.2,
                                                       shadows: [Shadow(blurRadius: 16, color: Colors.black87)],
+                                                    ),
+                                                  ),
+                                                  // 🆕 Lấy product id ra hiện thẳng trên card (yêu cầu:
+                                                  // dễ đối chiếu id ngoài admin/DB mà không cần mò vào chi tiết).
+                                                  Text(
+                                                    "ID: $productId",
+                                                    style: const TextStyle(
+                                                      fontSize: 10.5,
+                                                      color: Colors.white60,
+                                                      fontWeight: FontWeight.w600,
+                                                      shadows: [Shadow(blurRadius: 8, color: Colors.black87)],
                                                     ),
                                                   ),
                                                   const SizedBox(height: 6),
