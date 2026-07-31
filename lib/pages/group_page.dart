@@ -158,15 +158,23 @@ class _GroupPageState extends State<GroupPage> {
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text(
-                "Quán nổi bật",
-                style: TextStyle(
-                  fontSize: 23,
-                  fontWeight: FontWeight.w800,
-                  letterSpacing: 0.2,
-                  color: textWhite,
+              // 🔧 FIX: Expanded + ellipsis — khi zoom cỡ chữ hệ thống trên
+              // máy màn hình hẹp, tiêu đề sẽ tự co/ellipsis thay vì đẩy nút
+              // "Bản đồ quán" tràn ra ngoài màn hình.
+              Expanded(
+                child: Text(
+                  "Quán nổi bật",
+                  overflow: TextOverflow.ellipsis,
+                  maxLines: 1,
+                  style: TextStyle(
+                    fontSize: 23,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 0.2,
+                    color: textWhite,
+                  ),
                 ),
               ),
+              const SizedBox(width: 8),
               GestureDetector(
                 onTap: () {
                   Navigator.push(

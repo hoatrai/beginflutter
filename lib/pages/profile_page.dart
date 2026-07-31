@@ -10,6 +10,7 @@ import 'package:shimmer/shimmer.dart' as shimmer;
 import '../config/app_config.dart';
 import 'privacy_policy_page.dart';
 import 'terms_of_service_page.dart';
+import 'user_list_page.dart';
 
 
 class ProfilePage extends StatefulWidget {
@@ -299,6 +300,11 @@ class _ProfilePageState extends State<ProfilePage> {
     super.initState();
     _fetchUserData();
   }
+
+  // 🆕 Chỉ admin (role "administrator" trả về từ profile/v1/user/{id})
+  // mới thấy nút quản lý user bên dưới.
+  bool get _isAdmin =>
+      (_userData?["roles"] ?? "").toString().toLowerCase().contains("administrator");
 
   Future<void> _fetchUserData() async {
     setState(() {
@@ -689,7 +695,16 @@ class _ProfilePageState extends State<ProfilePage> {
                         );
                       },
                       icon: const Icon(Icons.edit),
-                      label: const Text("Cập nhật profile"),
+                      // 🔧 FIX: FittedBox + maxLines:1 — 2 nút chia đôi hàng
+                      // ngang trên máy màn hình hẹp + zoom cỡ chữ không đủ
+                      // chỗ cho "Cập nhật profile" trên 1 dòng, chữ bị wrap
+                      // xuống dòng 2 rồi bị cắt bởi chiều cao cố định của
+                      // button (nhìn như chỉ còn "Cập nhật"). FittedBox tự
+                      // co nhỏ chữ vừa khít thay vì bị cắt mất chữ.
+                      label: FittedBox(
+                        fit: BoxFit.scaleDown,
+                        child: Text("Cập nhật profile", maxLines: 1),
+                      ),
                       style: ElevatedButton.styleFrom(
                         backgroundColor: Colors.transparent,
                         shadowColor: Colors.transparent,
@@ -713,7 +728,10 @@ class _ProfilePageState extends State<ProfilePage> {
                     child: ElevatedButton.icon(
                       onPressed: _logout,
                       icon: const Icon(Icons.logout, size: 16),
-                      label: const Text("Đăng xuất"),
+                      label: FittedBox(
+                        fit: BoxFit.scaleDown,
+                        child: Text("Đăng xuất", maxLines: 1),
+                      ),
                       style: ElevatedButton.styleFrom(
                         backgroundColor: Colors.transparent,
                         shadowColor: Colors.transparent,
@@ -729,29 +747,99 @@ class _ProfilePageState extends State<ProfilePage> {
           ),
           const SizedBox(height: 16),
 
+          // 🆕 Nút quản lý user — chỉ hiện với tài khoản admin.
+          if (_isAdmin) ...[
+            Container(
+              margin: const EdgeInsets.symmetric(horizontal: 32),
+              width: double.infinity,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(16),
+                color: Colors.white.withOpacity(0.14),
+                border: Border.all(color: Colors.white.withOpacity(0.3)),
+              ),
+              child: Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(16),
+                  onTap: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => const UserListPage()),
+                    );
+                  },
+                  child: const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 14),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.admin_panel_settings, color: Colors.white, size: 18),
+                        SizedBox(width: 8),
+                        Text(
+                          "Quản lý user",
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.w600,
+                            fontSize: 14,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+          ],
+
           // 🆕 Chính sách bảo mật / Điều khoản sử dụng — bắt buộc phải
           // truy cập được trong app theo yêu cầu của App Store/Play Store.
           Container(
-            margin: const EdgeInsets.symmetric(horizontal: 32),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                TextButton(
-                  onPressed: () => Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (_) => const PrivacyPolicyPage()),
-                  ),
-                  child: const Text("Chính sách bảo mật", style: TextStyle(color: Colors.white70)),
-                ),
-                const Text("•", style: TextStyle(color: Colors.white38)),
-                TextButton(
-                  onPressed: () => Navigator.push(
-                    context,
-                    MaterialPageRoute(builder: (_) => const TermsOfServicePage()),
-                  ),
-                  child: const Text("Điều khoản sử dụng", style: TextStyle(color: Colors.white70)),
-                ),
-              ],
+            margin: const EdgeInsets.symmetric(horizontal: 16),
+            // 🔧 FIX: dùng Wrap thay vì Row cố định — trên máy màn hình hẹp
+            // hoặc khi zoom cỡ chữ hệ thống, 2 nút sẽ tự xuống dòng thay
+            // vì bị tràn ngang. Đồng thời bọc thêm FittedBox + ConstrainedBox
+            // cho từng nhãn — Wrap không tự co được một item ĐƠN LẺ nếu bản
+            // thân item đó (1 TextButton) đã rộng hơn cả màn hình, nên cần
+            // ràng buộc maxWidth rõ ràng để chữ luôn tự co vừa, không tràn.
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                return Wrap(
+                  alignment: WrapAlignment.center,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  spacing: 4,
+                  children: [
+                    ConstrainedBox(
+                      constraints: BoxConstraints(maxWidth: constraints.maxWidth),
+                      child: TextButton(
+                        onPressed: () => Navigator.push(
+                          context,
+                          MaterialPageRoute(builder: (_) => const PrivacyPolicyPage()),
+                        ),
+                        child: FittedBox(
+                          fit: BoxFit.scaleDown,
+                          child: Text("Chính sách bảo mật",
+                              maxLines: 1, style: TextStyle(color: Colors.white70)),
+                        ),
+                      ),
+                    ),
+                    const Text("•", style: TextStyle(color: Colors.white38)),
+                    ConstrainedBox(
+                      constraints: BoxConstraints(maxWidth: constraints.maxWidth),
+                      child: TextButton(
+                        onPressed: () => Navigator.push(
+                          context,
+                          MaterialPageRoute(builder: (_) => const TermsOfServicePage()),
+                        ),
+                        child: FittedBox(
+                          fit: BoxFit.scaleDown,
+                          child: Text("Điều khoản sử dụng",
+                              maxLines: 1, style: TextStyle(color: Colors.white70)),
+                        ),
+                      ),
+                    ),
+                  ],
+                );
+              },
             ),
           ),
 

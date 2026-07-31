@@ -714,6 +714,22 @@ class CryptoApp extends StatelessWidget {
           ),
         ),
         home: initialPage,
+        // 🔧 FIX: chặn text-scale (zoom màn hình / cỡ chữ hệ thống) vượt
+        // quá 1.2x. Nếu không clamp, khi user bật "Cỡ chữ lớn" trên máy
+        // độ phân giải thấp, các Row/Grid có kích thước cố định trong app
+        // (profile_page, group_page, product_detail_page, ...) sẽ bị vỡ
+        // layout / tràn chữ (RenderFlex overflow).
+        builder: (context, child) {
+          final mq = MediaQuery.of(context);
+          final clampedScaler = mq.textScaler.clamp(
+            minScaleFactor: 0.9,
+            maxScaleFactor: 1.2,
+          );
+          return MediaQuery(
+            data: mq.copyWith(textScaler: clampedScaler),
+            child: child!,
+          );
+        },
       ),
     );
   }
@@ -962,20 +978,29 @@ class _MainPageState extends State<MainPage>
         scale: isSelected ? 1.08 : 1.0,
         duration: const Duration(milliseconds: 250),
         curve: Curves.easeOutBack,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, color: isSelected ? accentOrange : unselectedColor),
-            const SizedBox(height: 2),
-            Text(
-              label,
-              style: TextStyle(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 2),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                icon,
+                size: 22,
                 color: isSelected ? accentOrange : unselectedColor,
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
               ),
-            ),
-          ],
+              const SizedBox(height: 3),
+              Text(
+                label,
+                style: TextStyle(
+                  color: isSelected ? accentOrange : unselectedColor,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  height: 1.0,
+                  letterSpacing: 0.1,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -1101,10 +1126,10 @@ class _MainPageState extends State<MainPage>
                 mainAxisAlignment: MainAxisAlignment.spaceAround,
                 children: [
                   _navItem(Icons.group, "Lời mời", 0),
-                  _navItem(Icons.map_outlined, "Bản đồ", 1),
+                  _navItem(Icons.map_outlined, "Map kèo", 1),
                   const SizedBox(width: 40),
-                  _navItem(Icons.article_outlined, "Quán", 2),
-                  _navItem(Icons.account_circle_outlined, "Hồ sơ", 3),
+                  _navItem(Icons.article_outlined, "Quán gần", 2),
+                  _navItem(Icons.account_circle_outlined, "Profile", 3),
                 ],
               ),
             ],

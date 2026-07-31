@@ -1236,10 +1236,12 @@ class _ChatPageState extends State<ChatPage> {
                     child: CircleAvatar(
                       radius: 18,
                       backgroundColor: accentOrange,
-                      backgroundImage: widget.targetAvatar != null
+                      backgroundImage: (widget.targetAvatar != null &&
+                          widget.targetAvatar!.isNotEmpty)
                           ? NetworkImage(widget.targetAvatar!)
                           : null,
-                      child: widget.targetAvatar == null
+                      child: (widget.targetAvatar == null ||
+                          widget.targetAvatar!.isEmpty)
                           ? Text(
                         widget.targetUser[0].toUpperCase(),
                         style: const TextStyle(color: Colors.white),
@@ -1248,11 +1250,15 @@ class _ChatPageState extends State<ChatPage> {
                     ),
                   ),
                   const SizedBox(width: 10),
-                  Text(
-                    widget.targetUser,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
+                  Expanded(
+                    child: Text(
+                      widget.targetUser,
+                      overflow: TextOverflow.ellipsis,
+                      maxLines: 1,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
                   ),
                 ],

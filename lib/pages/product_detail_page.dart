@@ -2032,12 +2032,16 @@ class _ProductDetailPageState extends State<ProductDetailPage>
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Text(
-                '📸 Khoảnh khắc bàn nhậu',
-                style: TextStyle(
-                  color: Colors.orangeAccent,
-                  fontSize: 15,
-                  fontWeight: FontWeight.bold,
+              Expanded(
+                child: Text(
+                  '📸 Khoảnh khắc bàn nhậu',
+                  overflow: TextOverflow.ellipsis,
+                  maxLines: 1,
+                  style: TextStyle(
+                    color: Colors.orangeAccent,
+                    fontSize: 15,
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
               ),
               Row(
@@ -2607,19 +2611,29 @@ class _ProductDetailPageState extends State<ProductDetailPage>
           ],
 
           // ── Short fields: grid 2 cột ───────────────────────────────────
+          // 🔧 FIX: GridView.count với childAspectRatio cố định ép chiều
+          // cao ô theo tỉ lệ chiều rộng — khi màn hình hẹp (độ phân giải
+          // thấp) + zoom cỡ chữ, nội dung trong ô cao hơn ô cho phép và bị
+          // tràn (RenderFlex overflow). Thay bằng LayoutBuilder + Wrap để
+          // mỗi ô tự cao theo nội dung thay vì bị ép cứng.
           if (shortMeta.isNotEmpty) ...[
-            GridView.count(
-              crossAxisCount: 2,
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              crossAxisSpacing: 8,
-              mainAxisSpacing: 8,
-              childAspectRatio: 2.8,
-              children: shortMeta.map((m) => _InfoCell(
-                icon: m.def.$1,
-                label: m.def.$2,
-                value: m.value,
-              )).toList(),
+            LayoutBuilder(
+              builder: (context, constraints) {
+                const spacing = 8.0;
+                final cellWidth = (constraints.maxWidth - spacing) / 2;
+                return Wrap(
+                  spacing: spacing,
+                  runSpacing: spacing,
+                  children: shortMeta.map((m) => SizedBox(
+                    width: cellWidth,
+                    child: _InfoCell(
+                      icon: m.def.$1,
+                      label: m.def.$2,
+                      value: m.value,
+                    ),
+                  )).toList(),
+                );
+              },
             ),
             const SizedBox(height: 10),
           ],
@@ -4669,13 +4683,18 @@ class _InfoCountBar extends StatelessWidget {
             children: [
               Icon(Icons.group, color: barColor, size: 16),
               const SizedBox(width: 8),
-              Text(
-                'Số người tham gia',
-                style: TextStyle(
-                    color: Colors.white.withOpacity(0.7),
-                    fontSize: 12,
-                    fontWeight: FontWeight.w500),
+              Flexible(
+                child: Text(
+                  'Số người tham gia',
+                  overflow: TextOverflow.ellipsis,
+                  maxLines: 1,
+                  style: TextStyle(
+                      color: Colors.white.withOpacity(0.7),
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500),
+                ),
               ),
+              const SizedBox(width: 6),
               const Spacer(),
               Text(
                 '$joined / $max',
@@ -4772,6 +4791,8 @@ class _InfoCell extends StatelessWidget {
             children: [
               Text(
                 label,
+                overflow: TextOverflow.ellipsis,
+                maxLines: 1,
                 style: TextStyle(
                   color: Colors.white.withOpacity(0.5),
                   fontSize: 10,

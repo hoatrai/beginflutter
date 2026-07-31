@@ -1126,7 +1126,27 @@ out center tags;
                 Positioned(
                   bottom: 32,
                   child: GestureDetector(
-                    onTap: () {
+                    onTap: () async {
+                      // 🔧 Presence qua socket không phải lúc nào cũng có avatar
+                      // (currentUserAvatar phía user kia có thể rỗng lúc họ
+                      // gửi presence), khác với shop_page vốn chủ động gọi API
+                      // profile để lấy avatar. Ở đây làm tương tự: nếu
+                      // presence không có avatar thì gọi API lấy trước khi
+                      // mở ChatPage, tránh mở chat với avatar rỗng.
+                      String avatarUrl = user['avatar'] ?? "";
+                      if (avatarUrl.isEmpty) {
+                        try {
+                          final res = await http.get(Uri.parse(
+                              "${AppConfig.webDomain}/wp-json/profile/v1/user/$targetUserId"));
+                          if (res.statusCode == 200) {
+                            final data = jsonDecode(res.body);
+                            avatarUrl = data['avatar_url'] ?? '';
+                          }
+                        } catch (e) {
+                          debugPrint("Loi fetch avatar tu map: $e");
+                        }
+                      }
+                      if (!context.mounted) return;
                       Navigator.push(
                         context,
                         MaterialPageRoute(
@@ -1135,7 +1155,7 @@ out center tags;
                             userId: widget.userId,
                             targetUser: targetUsername,
                             targetId: int.parse(targetUserId),
-                            targetAvatar: user['avatar'] ?? "",
+                            targetAvatar: avatarUrl,
                             serverUrl: AppConfig.websocketUrl,
                           ),
                         ),
