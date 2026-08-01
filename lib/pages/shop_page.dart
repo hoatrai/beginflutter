@@ -94,6 +94,12 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
   int page = 1;
   int myUserId = 0; // khai báo int
   bool hasMore = true;
+  // 🔑 FIX race-condition: mỗi lần _restartFetch() tăng token này lên 1.
+  // fetchProducts() chụp lại giá trị token tại thời điểm bắt đầu gọi, và
+  // so sánh lại trước khi setState — nếu có 1 lần restart mới hơn xen vào
+  // trong lúc đang chờ response, request cũ sẽ tự nhận ra mình "lỗi thời"
+  // và im lặng bỏ qua, không ghi đè lên state của lần load mới hơn.
+  int _fetchToken = 0;
   // 🆕 FIX vòng lặp fetchProducts: chốt lại chỉ bắn prefetch 1 LẦN cho mỗi
   // trang đang tải hiện tại, thay vì bắn lại mỗi khi itemBuilder rebuild
   // các item "gần cuối" (dễ xảy ra vô hạn khi list ngắn, vì mọi item đều
@@ -359,22 +365,10 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
           // Nút "Tất cả"
           GestureDetector(
             onTap: () {
-              setState(() {
-                selectedCategory = null;
-                products.clear();
-                page = 1;
-                _prefetchTriggeredForPage = false;
-                hasMore = true;
-                loading = true;
-                // 🆕 FIX: nếu request load-more trước đó (page cũ) đang
-                // treo/chưa xong, _loadingMore vẫn = true -> guard đầu
-                // fetchProducts() sẽ chặn request mới này, khiến bấm tab
-                // không có tác dụng gì (spinner đứng nguyên trạng thái cũ).
-                // Reset lại đây để tab luôn gọi được request mới.
-                _loadingMore = false;
-                _emptyPageCount = 0;
-              });
-              fetchProducts();
+              setState(() => selectedCategory = null);
+              // 🔧 dùng choke point duy nhất để reset page/hasMore/token...
+              // thay vì tự tay reset lại ở đây (xem _restartFetch).
+              _restartFetch();
             },
             child: Container(
               margin: const EdgeInsets.only(right: 8),
@@ -409,20 +403,10 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
             final Color chipColor = _getCategoryColor(f['value']!);
             return GestureDetector(
               onTap: () {
-                setState(() {
-                  selectedCategory = f['value'];
-                  products.clear();
-                  page = 1;
-                  _prefetchTriggeredForPage = false;
-                  hasMore = true;
-                  loading = true;
-                  // 🆕 FIX: xem giải thích ở nút "Tất cả" phía trên — không
-                  // reset thì tab bị guard (_loadingMore) chặn nếu request
-                  // trước đó chưa xong.
-                  _loadingMore = false;
-                  _emptyPageCount = 0;
-                });
-                fetchProducts();
+                setState(() => selectedCategory = f['value']);
+                // 🔧 dùng choke point duy nhất, xem giải thích ở nút
+                // "Tất cả" phía trên (_restartFetch).
+                _restartFetch();
               },
               child: Container(
                 margin: const EdgeInsets.only(right: 8),
@@ -719,13 +703,7 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
     if (!mounted) return;
 
     if (products.isEmpty) {
-      setState(() {
-        page = 1;
-        _prefetchTriggeredForPage = false;
-        hasMore = true;
-        _emptyPageCount = 0;
-      });
-      fetchProducts();
+      _restartFetch(clearProducts: false); // list đang rỗng, khỏi cần clear
       return;
     }
 
@@ -847,13 +825,7 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
       myLat = pos.latitude;
       myLng = pos.longitude;
       // refresh lại danh sách theo vị trí mới chính xác hơn
-      setState(() {
-        page = 1;
-        _prefetchTriggeredForPage = false;
-        hasMore = true;
-        products.clear();
-      });
-      fetchProducts();
+      _restartFetch();
     } catch (e) {
       debugPrint("⚠️ _refreshAccurateLocationInBackground error: $e");
     }
@@ -1722,12 +1694,36 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
     });
   }
 
+  /// 🔑 Điểm DUY NHẤT để reset trạng thái list + gọi load lại từ đầu.
+  /// Mọi nơi cần "load lại từ đầu" (đổi filter, có GPS mới, pull-to-refresh,
+  /// retry lỗi...) đều phải đi qua đây, KHÔNG tự tay reset page/hasMore/
+  /// _loadingMore/_emptyPageCount... ở chỗ khác nữa — tránh lặp lại logic
+  /// reset rải rác ở nhiều nơi (dễ quên đồng bộ khi sau này thêm field mới).
+  Future<void> _restartFetch({bool clearProducts = true}) {
+    _fetchToken++; // vô hiệu hóa mọi request cũ đang bay, dù nó có trả về sau
+    setState(() {
+      if (clearProducts) products.clear();
+      page = 1;
+      hasMore = true;
+      loading = true;
+      _loadingMore = false;
+      _prefetchTriggeredForPage = false;
+      _emptyPageCount = 0;
+      hasError = false;
+    });
+    return fetchProducts();
+  }
+
   Future<void> fetchProducts() async {
     if (!hasMore || _loadingMore) return;
     debugPrint("🔄 fetchProducts page=$page emptyCount=$_emptyPageCount hasMore=$hasMore");
     if (!hasMore || _loadingMore) return;
 
     final isFirstPage = page == 1;
+    // 📌 chụp lại token NGAY tại thời điểm bắt đầu gọi — nếu có 1 lần
+    // _restartFetch() khác xen vào trước khi request này trả về, token sẽ
+    // lệch và mọi setState phía dưới sẽ tự bỏ qua thay vì ghi đè.
+    final myToken = _fetchToken;
 
     setState(() {
       if (isFirstPage) loading = true;
@@ -1735,6 +1731,20 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
     });
 
     try {
+      // 🆕 Đẩy category filter lên BE thay vì tải hết rồi lọc lại ở Flutter
+      // (cách cũ: BE trả 10 sp/trang bất kể category -> FE .where() lọc
+      // trong đúng 10 sp đó -> hay ra rỗng dù còn nhiều sp hợp lệ ở trang
+      // sau -> phải tự động gọi lại nhiều lần mới đủ data, rất chậm).
+      // Giờ gửi thẳng tên category cho BE lọc + phân trang luôn, per_page=10
+      // trả về là 10 sp ĐÚNG category cần, khỏi phải lọc lại lần nữa.
+      // ⚠️ Cần BE có 1 filter hook nhận param `nhau_category` (đăng ký kiểu
+      // giống hệt `nhau_sort=keo_priority` đã có trong keo-priority-sort.php),
+      // tự map tên category ("Nhậu", "Karaoke", "Bar/Pub", "Beer Club") sang
+      // tax_query cho product_cat rồi áp vào query WC trước khi trả kết quả.
+      final categoryParam = selectedCategory != null
+          ? "&nhau_category=${Uri.encodeQueryComponent(selectedCategory!)}"
+          : "";
+
       final url = Uri.parse(
         "${AppConfig.webDomain}/wp-json/wc/v3/products"
             "?status=publish&per_page=10&page=$page"
@@ -1746,6 +1756,7 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
         // trong app gọi thẳng wc/v3/products (vd. _loadInvites()) không
         // truyền param này nên không bị ảnh hưởng.
             "&nhau_sort=keo_priority"
+            "$categoryParam"
         // 🚀 CHỈ lấy field cần dùng ở shop page thay vì cả schema WC
         // (description, attributes, variations, links...) → JSON nhẹ
         // hơn đáng kể, parse nhanh hơn, tốn ít băng thông hơn.
@@ -1773,6 +1784,10 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
       final response = await http
           .get(url)
           .timeout(const Duration(seconds: 12));
+
+      // ✅ có 1 lần _restartFetch() mới hơn xen vào trong lúc chờ response
+      // -> request này đã lỗi thời, im lặng bỏ qua, KHÔNG đụng vào state.
+      if (myToken != _fetchToken) return;
 
       if (response.statusCode != 200) {
         setState(() {
@@ -1856,6 +1871,10 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
       final int nextEmptyPageCount = pageFilteredEmpty ? _emptyPageCount + 1 : 0;
       final bool willAutoRetry = pageFilteredEmpty && nextEmptyPageCount < 3;
 
+      // ✅ check lại lần nữa trước setState chính (phòng lúc parse/lọc ở
+      // trên tốn thời gian, đủ để 1 lần restart khác chen vào giữa chừng).
+      if (myToken != _fetchToken) return;
+
       setState(() {
         final existingIds = products.map((p) => p['id']).toSet();
         final newOnes = parsedProducts.where((p) => !existingIds.contains(p['id'])).toList();
@@ -1887,7 +1906,9 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
       // ✅ Nếu trang này filter ra 0 nhưng API còn data → tự fetch trang tiếp
       if (willAutoRetry) {
         await Future.delayed(const Duration(milliseconds: 300));
-        if (mounted && hasMore) fetchProducts();
+        // ✅ nếu trong lúc chờ 300ms này có 1 lần restart khác xen vào thì
+        // đừng tự retry chuỗi cũ nữa — để lần restart mới tự lo request nó.
+        if (mounted && hasMore && myToken == _fetchToken) fetchProducts();
       }
 
       // Fetch creator + invite sau khi UI hiện
@@ -1913,6 +1934,9 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
 
     } catch (e) {
       debugPrint("❌ fetchProducts error: $e");
+      // ✅ lỗi của 1 request đã lỗi thời (bị token mới đè lên) — đừng dùng
+      // nó để set hasError, vì lần restart sau nó mới là "sự thật" hiện tại.
+      if (myToken != _fetchToken) return;
       setState(() {
         loading = false;
         _loadingMore = false;
@@ -2881,15 +2905,7 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
             ),
             const SizedBox(height: 16),
             ElevatedButton.icon(
-              onPressed: () {
-                setState(() {
-                  hasError = false;
-                  page = 1;
-                  _prefetchTriggeredForPage = false;
-                  hasMore = true;
-                });
-                fetchProducts();
-              },
+              onPressed: () => _restartFetch(clearProducts: false),
               icon: const Icon(Icons.refresh),
               label: const Text("Thử lại"),
               style: ElevatedButton.styleFrom(
@@ -2931,15 +2947,7 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
 
   // 🆕 Pull-to-refresh: reset trang + fetch lại từ đầu + đồng bộ blocked-list
   Future<void> _handleRefresh() async {
-    setState(() {
-      page = 1;
-      _prefetchTriggeredForPage = false;
-      hasMore = true;
-      hasError = false;
-      _emptyPageCount = 0;
-      products.clear();
-    });
-    await fetchProducts();
+    await _restartFetch();
     await fetchBlockedUsers();
   }
 
@@ -4877,12 +4885,11 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
                     },
                     child: Builder(
                       builder: (context) {
-                        final filtered = selectedCategory == null
-                            ? products
-                            : products.where((p) {
-                          final cats = p['category_names']?.toString().toLowerCase() ?? '';
-                          return cats.contains(selectedCategory!.toLowerCase());
-                        }).toList();
+                        // 🆕 Không lọc lại category ở đây nữa — BE đã lọc
+                        // + phân trang đúng theo `nhau_category` gửi lên
+                        // trong fetchProducts(), nên `products` chính là
+                        // danh sách đã đúng filter, dùng thẳng luôn.
+                        final filtered = products;
 
                         return ListView.builder(
                           physics: const AlwaysScrollableScrollPhysics(),
