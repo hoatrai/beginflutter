@@ -17,6 +17,7 @@ import 'package:intl/intl.dart';
 import 'package:shimmer/shimmer.dart' as shimmer;
 import 'dart:math';
 import '../config/app_config.dart';
+import 'beer_background.dart';
 
 // ─── DESIGN TOKENS ────────────────────────────────────────────────────────────
 class _AppColors {
@@ -100,6 +101,13 @@ class _CreateInvitePageState extends State<CreateInvitePage> with TickerProvider
   final _picker = ImagePicker();
   late WebSocketChannel _channel;
   List<Map<String, dynamic>> products = [];
+
+  // GlobalKey để gọi thẳng BlackHoleBackgroundState.kickAt(...) từ Listener
+  // ngoài cùng — nội dung trang (form, scroll view) nằm đè lên trên nên
+  // bình thường sẽ nuốt hết mọi sự kiện chạm trước khi nó lọt xuống
+  // GestureDetector bên trong background.
+  final GlobalKey<BlackHoleBackgroundState> _bgKey =
+  GlobalKey<BlackHoleBackgroundState>();
 
   late AnimationController _pulseController;
   late Animation<double> _pulseAnimation;
@@ -553,16 +561,34 @@ class _CreateInvitePageState extends State<CreateInvitePage> with TickerProvider
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.transparent,
-      body: Container(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            colors: [_AppColors.bgGradientStart, _AppColors.bgGradientEnd],
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-          ),
-        ),
+      body: Listener(
+        behavior: HitTestBehavior.translucent,
+        onPointerDown: (event) => _bgKey.currentState?.kickAt(event.position),
+        onPointerMove: (event) =>
+            _bgKey.currentState?.kickAt(event.position, strength: 0.4),
         child: Stack(
           children: [
+            // 1️⃣ Background — animated beer-foam eruption
+            Positioned.fill(
+              child: BlackHoleBackground(key: _bgKey),
+            ),
+            // 2️⃣ Overlay mờ (giảm opacity so với bản gradient đặc cũ để
+            // vẫn thấy được hiệu ứng nền phía sau)
+            Positioned.fill(
+              child: Container(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [
+                      _AppColors.bgGradientStart.withOpacity(0.55),
+                      _AppColors.bgGradientEnd.withOpacity(0.45),
+                    ],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
+                ),
+              ),
+            ),
+            // 3️⃣ Nội dung trang
             CustomScrollView(
               controller: _scrollController,
               slivers: [

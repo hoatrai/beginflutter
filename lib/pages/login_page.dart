@@ -14,6 +14,7 @@ import '../services/app_globals.dart';
 import 'set_dob_page.dart';
 import 'set_password_page.dart';
 import 'age_restricted_page.dart';
+import 'beer_background.dart';
 
 
 
@@ -32,6 +33,13 @@ class _LoginPageState extends State<LoginPage> {
   bool _loading = false;
   bool _showPassword = false;
   String? _errorMessage;
+
+  // GlobalKey để gọi thẳng BlackHoleBackgroundState.kickAt(...) từ Listener
+  // ngoài cùng bên dưới — cần thiết vì form login (TextField, nút, vùng
+  // cuộn) nằm đè lên trên và bình thường sẽ nuốt hết mọi sự kiện chạm
+  // trước khi nó lọt được xuống GestureDetector bên trong background.
+  final GlobalKey<BlackHoleBackgroundState> _bgKey =
+  GlobalKey<BlackHoleBackgroundState>();
 
   // 🆕 AGE-GATE: dùng chung cho cả đăng nhập mật khẩu lẫn vân tay/Face ID.
   // Trước đây 2 luồng này push thẳng MainPage sau khi có JWT, bỏ qua hẳn
@@ -110,10 +118,10 @@ class _LoginPageState extends State<LoginPage> {
   /// giữ lại tên tối thiểu đã có từ bước đăng nhập, để ít nhất còn hiện
   /// đúng tên thay vì "-".
   Future<void> _fetchAndCacheFullUser(
-    String token, {
-    required String fallbackId,
-    required String fallbackName,
-  }) async {
+      String token, {
+        required String fallbackId,
+        required String fallbackName,
+      }) async {
     try {
       final res = await http.get(
         Uri.parse("${AppConfig.webDomain}/wp-json/spiritwebs/v1/me"),
@@ -318,145 +326,148 @@ class _LoginPageState extends State<LoginPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: Stack(
-        children: [
-          // 1️⃣ Background
-          SizedBox.expand(
-            child: Image.asset(
-              "assets/images/background.png",
-              fit: BoxFit.cover,
+      body: Listener(
+        behavior: HitTestBehavior.translucent,
+        onPointerDown: (event) => _bgKey.currentState?.kickAt(event.position),
+        onPointerMove: (event) =>
+            _bgKey.currentState?.kickAt(event.position, strength: 0.4),
+        child: Stack(
+          children: [
+            // 1️⃣ Background — animated starfield + drifting black hole
+            Positioned.fill(
+              child: BlackHoleBackground(key: _bgKey),
             ),
-          ),
-          // 2️⃣ Overlay mờ
-          Container(
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                colors: [
-                  const Color(0xFF0D47A1).withOpacity(0.55),
-                  const Color(0xFFF57C00).withOpacity(0.45),
-                ],
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
+            // 2️⃣ Overlay mờ
+            Container(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  colors: [
+                    const Color(0xFF0D47A1).withOpacity(0.55),
+                    const Color(0xFFF57C00).withOpacity(0.45),
+                  ],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
               ),
             ),
-          ),
-          // 3️⃣ Form login
-          Center(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.all(24),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  const Text(
-                    "Đăng nhập",
-                    style: TextStyle(
-                      fontSize: 26,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.white,
-                    ),
-                  ),
-                  const SizedBox(height: 30),
-                  TextField(
-                    controller: _usernameController,
-                    style: const TextStyle(color: Colors.white),
-                    decoration: const InputDecoration(
-                      labelText: "Tên đăng nhập",
-                      labelStyle: TextStyle(color: Colors.white),
-                      filled: true,
-                      fillColor: Colors.white24,
-                      border: OutlineInputBorder(),
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  TextField(
-                    controller: _passwordController,
-                    obscureText: !_showPassword,
-                    style: const TextStyle(color: Colors.white),
-                    decoration: InputDecoration(
-                      labelText: "Mật khẩu",
-                      labelStyle: const TextStyle(color: Colors.white),
-                      filled: true,
-                      fillColor: Colors.white24,
-                      border: const OutlineInputBorder(),
-                      suffixIcon: IconButton(
-                        icon: Icon(
-                          _showPassword ? Icons.visibility_off : Icons.visibility,
-                          color: Colors.white,
-                        ),
-                        onPressed: () {
-                          setState(() {
-                            _showPassword = !_showPassword;
-                          });
-                        },
+            // 3️⃣ Form login
+            Center(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    const Text(
+                      "Đăng nhập",
+                      style: TextStyle(
+                        fontSize: 26,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
                       ),
                     ),
-                  ),
-                  Align(
-                    alignment: Alignment.centerRight,
-                    child: TextButton(
-                      onPressed: _loading
-                          ? null
-                          : () {
-                        Navigator.push(
+                    const SizedBox(height: 30),
+                    TextField(
+                      controller: _usernameController,
+                      style: const TextStyle(color: Colors.white),
+                      decoration: const InputDecoration(
+                        labelText: "Tên đăng nhập",
+                        labelStyle: TextStyle(color: Colors.white),
+                        filled: true,
+                        fillColor: Colors.white24,
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    TextField(
+                      controller: _passwordController,
+                      obscureText: !_showPassword,
+                      style: const TextStyle(color: Colors.white),
+                      decoration: InputDecoration(
+                        labelText: "Mật khẩu",
+                        labelStyle: const TextStyle(color: Colors.white),
+                        filled: true,
+                        fillColor: Colors.white24,
+                        border: const OutlineInputBorder(),
+                        suffixIcon: IconButton(
+                          icon: Icon(
+                            _showPassword ? Icons.visibility_off : Icons.visibility,
+                            color: Colors.white,
+                          ),
+                          onPressed: () {
+                            setState(() {
+                              _showPassword = !_showPassword;
+                            });
+                          },
+                        ),
+                      ),
+                    ),
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: TextButton(
+                        onPressed: _loading
+                            ? null
+                            : () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(builder: (_) => const ForgotPasswordPage()),
+                          );
+                        },
+                        child: const Text(
+                          "Quên mật khẩu?",
+                          style: TextStyle(color: Colors.white70),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    if (_errorMessage != null)
+                      Text(_errorMessage!, style: const TextStyle(color: Colors.red)),
+                    const SizedBox(height: 20),
+                    ElevatedButton(
+                      onPressed: _loading ? null : _login,
+                      style: ElevatedButton.styleFrom(
+                        minimumSize: const Size.fromHeight(50),
+                      ),
+                      child: _loading
+                          ? shimmer.Shimmer.fromColors(
+                        baseColor: Colors.white,
+                        highlightColor: Colors.white.withOpacity(0.4),
+                        child: const Text(
+                          "Đang đăng nhập...",
+                          style: TextStyle(fontWeight: FontWeight.bold),
+                        ),
+                      )
+                          : const Text("Đăng nhập"),
+
+                    ),
+                    const SizedBox(height: 16),
+                    OutlinedButton.icon(
+                      style: OutlinedButton.styleFrom(
+                        minimumSize: const Size.fromHeight(50),
+                        foregroundColor: Colors.white,
+                        side: const BorderSide(color: Colors.white),
+                      ),
+                      icon: const Icon(Icons.fingerprint, size: 28),
+                      label: const Text("Đăng nhập bằng vân tay / Face ID"),
+                      onPressed: _loginWithBiometrics,
+                    ),
+                    TextButton(
+                      onPressed: () {
+                        Navigator.pushReplacement(
                           context,
-                          MaterialPageRoute(builder: (_) => const ForgotPasswordPage()),
+                          MaterialPageRoute(builder: (_) => const RegisterPage()),
                         );
                       },
                       child: const Text(
-                        "Quên mật khẩu?",
-                        style: TextStyle(color: Colors.white70),
+                        "👉 Chưa có tài khoản? Đăng ký ngay",
+                        style: TextStyle(color: Colors.white),
                       ),
                     ),
-                  ),
-                  const SizedBox(height: 4),
-                  if (_errorMessage != null)
-                    Text(_errorMessage!, style: const TextStyle(color: Colors.red)),
-                  const SizedBox(height: 20),
-                  ElevatedButton(
-                    onPressed: _loading ? null : _login,
-                    style: ElevatedButton.styleFrom(
-                      minimumSize: const Size.fromHeight(50),
-                    ),
-                    child: _loading
-                        ? shimmer.Shimmer.fromColors(
-                      baseColor: Colors.white,
-                      highlightColor: Colors.white.withOpacity(0.4),
-                      child: const Text(
-                        "Đang đăng nhập...",
-                        style: TextStyle(fontWeight: FontWeight.bold),
-                      ),
-                    )
-                        : const Text("Đăng nhập"),
-
-                  ),
-                  const SizedBox(height: 16),
-                  OutlinedButton.icon(
-                    style: OutlinedButton.styleFrom(
-                      minimumSize: const Size.fromHeight(50),
-                      foregroundColor: Colors.white,
-                      side: const BorderSide(color: Colors.white),
-                    ),
-                    icon: const Icon(Icons.fingerprint, size: 28),
-                    label: const Text("Đăng nhập bằng vân tay / Face ID"),
-                    onPressed: _loginWithBiometrics,
-                  ),
-                  TextButton(
-                    onPressed: () {
-                      Navigator.pushReplacement(
-                        context,
-                        MaterialPageRoute(builder: (_) => const RegisterPage()),
-                      );
-                    },
-                    child: const Text(
-                      "👉 Chưa có tài khoản? Đăng ký ngay",
-                      style: TextStyle(color: Colors.white),
-                    ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }

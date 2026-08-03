@@ -288,6 +288,11 @@ class _ProductDetailPageState extends State<ProductDetailPage>
   bool _isUploadingMedia       = false;
   bool _isUpdatingAttendance   = false;
   bool _isUpdatingInviteStatus = false;
+  // 🔧 FIX: trước đây bấm X kick không có phản hồi gì cho tới khi API trả về,
+  // dễ khiến user tưởng chưa bấm được nên bấm lại nhiều lần → gửi trùng
+  // request kick. Set này theo dõi userId đang có request kick đang chạy,
+  // dùng để (1) disable nút + hiện loading ngay lúc bấm, (2) chặn bấm lại.
+  final Set<int> _kickingUserIds = {};
   // 🆕 Bật/tắt hiệu ứng pháo hoa khi check-in "Đã tới" thành công.
   bool _showCheckinFirework    = false;
   // 🔧 FIX: theo dõi danh sách URL video đã init lần gần nhất, thay cho cờ
@@ -1077,6 +1082,9 @@ class _ProductDetailPageState extends State<ProductDetailPage>
 
   Future<void> _kickUser(int targetUserId) async {
     if (inviteId == null) return;
+    // 🔧 FIX: đang có request kick user này chạy rồi thì bỏ qua, tránh bấm
+    // liên tiếp gửi nhiều request trùng do không thấy phản hồi ngay.
+    if (_kickingUserIds.contains(targetUserId)) return;
     final target = _participants.firstWhere(
           (p) => p.userId == targetUserId,
       orElse: () => Participant(
@@ -1085,6 +1093,7 @@ class _ProductDetailPageState extends State<ProductDetailPage>
         trustScore: 50,
       ),
     );
+    setState(() => _kickingUserIds.add(targetUserId));
     try {
       final res = await http.post(
         Uri.parse(_ApiUrls.inviteKick),
@@ -1101,6 +1110,11 @@ class _ProductDetailPageState extends State<ProductDetailPage>
       _showSnack('Đã kick thành viên');
     } catch (e) {
       _showSnack('Không thể kick: $e');
+    } finally {
+      // 🔧 FIX: luôn gỡ trạng thái loading dù thành công hay lỗi, và chỉ
+      // setState khi widget còn mounted (tránh lỗi nếu user thoát trang
+      // giữa lúc đang chờ API).
+      if (mounted) setState(() => _kickingUserIds.remove(targetUserId));
     }
   }
 
@@ -1997,6 +2011,11 @@ class _ProductDetailPageState extends State<ProductDetailPage>
           else
             SingleChildScrollView(
               scrollDirection: Axis.horizontal,
+              // 🔧 FIX: mặc định SingleChildScrollView clip theo hardEdge,
+              // trong khi vương miện (top: -10) và nút kick (top: -5) trong
+              // _ParticipantCard tràn lên trên avatar 48px. Clip.none để
+              // không bị cắt mất phần trên khi có nhiều thành viên/host.
+              clipBehavior: Clip.none,
               child: Row(
                 children: _participants.map((p) {
                   final isMe    = p.userId == _currentUserId;
@@ -2008,6 +2027,7 @@ class _ProductDetailPageState extends State<ProductDetailPage>
                       isMe: isMe,
                       canKick: canKick,
                       isUpdatingAttendance: isMe && _isUpdatingAttendance,
+                      isKicking: _kickingUserIds.contains(p.userId),
                       onAttendanceTap: isMe ? _showAttendancePicker : null,
                       onKick: () => _kickUser(p.userId),
                     ),
@@ -4258,6 +4278,9 @@ class _ParticipantCard extends StatelessWidget {
   final bool isMe;
   final bool canKick;
   final bool isUpdatingAttendance;
+  // 🔧 FIX: cờ báo request kick user này đang chạy, để disable nút X + hiện
+  // spinner thay vì im lặng chờ API, tránh user tưởng chưa bấm được.
+  final bool isKicking;
   final VoidCallback? onAttendanceTap;
   final VoidCallback onKick;
 
@@ -4268,6 +4291,7 @@ class _ParticipantCard extends StatelessWidget {
     required this.isUpdatingAttendance,
     required this.onKick,
     this.onAttendanceTap,
+    this.isKicking = false,
   });
 
   @override
@@ -4314,12 +4338,24 @@ class _ParticipantCard extends StatelessWidget {
                 top: -5,
                 right: -5,
                 child: GestureDetector(
-                  onTap: onKick,
+                  // 🔧 FIX: khi đang chờ API thì bỏ onTap (null) để không
+                  // nhận thêm request kick trùng lúc user bấm liên tiếp.
+                  onTap: isKicking ? null : onKick,
                   child: Container(
                     padding: const EdgeInsets.all(3),
-                    decoration: const BoxDecoration(
-                        color: Colors.red, shape: BoxShape.circle),
-                    child: const Icon(Icons.close,
+                    decoration: BoxDecoration(
+                        color: isKicking ? Colors.red.withOpacity(0.5) : Colors.red,
+                        shape: BoxShape.circle),
+                    child: isKicking
+                    // 🔧 FIX: spinner nhỏ hiện NGAY lúc bấm, thay vì im
+                    // lặng chờ tới khi API trả về mới có phản hồi.
+                        ? const SizedBox(
+                      width: 11,
+                      height: 11,
+                      child: CircularProgressIndicator(
+                          strokeWidth: 1.5, color: Colors.white),
+                    )
+                        : const Icon(Icons.close,
                         size: 11, color: Colors.white),
                   ),
                 ),

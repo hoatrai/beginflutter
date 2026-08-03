@@ -7,6 +7,7 @@ import '../helpers/storage_helper.dart';
 import 'login_page.dart';
 import 'package:shimmer/shimmer.dart' as shimmer;
 import '../config/app_config.dart';
+import 'beer_background.dart';
 
 class EditProfilePage extends StatefulWidget {
   const EditProfilePage({super.key});
@@ -32,6 +33,13 @@ class _EditProfilePageState extends State<EditProfilePage> {
   final Color primaryBlue = const Color(0xFF0D47A1);
   final Color accentOrange = const Color(0xFFF57C00);
   final Color textWhite = Colors.white;
+
+  // GlobalKey để gọi thẳng BlackHoleBackgroundState.kickAt(...) từ Listener
+  // ngoài cùng — nội dung trang (form, scroll view) nằm đè lên trên nên
+  // bình thường sẽ nuốt hết mọi sự kiện chạm trước khi nó lọt xuống
+  // GestureDetector bên trong background.
+  final GlobalKey<BlackHoleBackgroundState> _bgKey =
+  GlobalKey<BlackHoleBackgroundState>();
 
   @override
   void initState() {
@@ -473,62 +481,60 @@ class _EditProfilePageState extends State<EditProfilePage> {
     return shimmer.Shimmer.fromColors(
       baseColor: baseColor,
       highlightColor: highlightColor,
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          children: [
-            const SizedBox(height: 20),
-            const CircleAvatar(radius: 55, backgroundColor: Colors.white),
-            const SizedBox(height: 20),
-            Container(
-              height: 42,
-              width: 160,
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(12),
-              ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const SizedBox(height: 20),
+          const CircleAvatar(radius: 55, backgroundColor: Colors.white),
+          const SizedBox(height: 20),
+          Container(
+            height: 42,
+            width: 160,
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(12),
             ),
-            const SizedBox(height: 24),
-            _skeletonInput(),
-            const SizedBox(height: 12),
-            _skeletonInput(),
-            const SizedBox(height: 12),
-            _skeletonInput(),
-            const SizedBox(height: 12),
-            Container(
-              height: 90,
-              width: double.infinity,
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(12),
-              ),
+          ),
+          const SizedBox(height: 24),
+          _skeletonInput(),
+          const SizedBox(height: 12),
+          _skeletonInput(),
+          const SizedBox(height: 12),
+          _skeletonInput(),
+          const SizedBox(height: 12),
+          Container(
+            height: 90,
+            width: double.infinity,
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(12),
             ),
-            const SizedBox(height: 20),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: List.generate(
-                4,
-                    (i) => Container(
-                  height: 32,
-                  width: 80,
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(20),
-                  ),
+          ),
+          const SizedBox(height: 20),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: List.generate(
+              4,
+                  (i) => Container(
+                height: 32,
+                width: 80,
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(20),
                 ),
               ),
             ),
-            const SizedBox(height: 30),
-            Row(
-              children: [
-                Expanded(child: _skeletonButton()),
-                const SizedBox(width: 12),
-                Expanded(child: _skeletonButton()),
-              ],
-            ),
-          ],
-        ),
+          ),
+          const SizedBox(height: 30),
+          Row(
+            children: [
+              Expanded(child: _skeletonButton()),
+              const SizedBox(width: 12),
+              Expanded(child: _skeletonButton()),
+            ],
+          ),
+        ],
       ),
     );
   }
@@ -554,12 +560,37 @@ class _EditProfilePageState extends State<EditProfilePage> {
     );
   }
 
+  /// Bọc nội dung trong SingleChildScrollView nhưng đảm bảo nó luôn cao
+  /// tối thiểu bằng khoảng trống khả dụng, rồi căn giữa theo chiều dọc.
+  /// Nếu không có bước này, khi nội dung (skeleton lúc loading, hoặc form
+  /// lúc bàn phím chưa mở) ngắn hơn màn hình, phần còn lại phía dưới sẽ
+  /// chỉ là nền trơn trông rất trống/xấu — giờ nội dung sẽ tự căn giữa
+  /// thay vì dồn hết lên trên và để lại khoảng trắng ở đáy.
+  Widget _fillScrollable(
+      Widget child, {
+        EdgeInsets padding = const EdgeInsets.fromLTRB(16, 24, 16, 32),
+      }) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final minHeight =
+        (constraints.maxHeight - padding.vertical).clamp(0.0, double.infinity);
+        return SingleChildScrollView(
+          padding: padding,
+          child: ConstrainedBox(
+            constraints: BoxConstraints(minHeight: minHeight),
+            child: Center(child: child),
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     Widget bodyContent;
 
     if (_loading) {
-      bodyContent = _buildProfileSkeleton();
+      bodyContent = _fillScrollable(_buildProfileSkeleton());
     } else if (_errorMessage != null) {
       bodyContent = Center(
         child: Padding(
@@ -569,9 +600,9 @@ class _EditProfilePageState extends State<EditProfilePage> {
         ),
       );
     } else {
-      bodyContent = SingleChildScrollView(
-        padding: const EdgeInsets.fromLTRB(16, 24, 16, 32),
-        child: Column(
+      bodyContent = _fillScrollable(
+        Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
             _buildAvatar(),
             const SizedBox(height: 10),
@@ -750,15 +781,36 @@ class _EditProfilePageState extends State<EditProfilePage> {
           ),
         ),
       ),
-      body: Container(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            colors: [primaryBlue.withOpacity(0.9), accentOrange.withOpacity(0.8)],
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-          ),
+      body: Listener(
+        behavior: HitTestBehavior.translucent,
+        onPointerDown: (event) => _bgKey.currentState?.kickAt(event.position),
+        onPointerMove: (event) =>
+            _bgKey.currentState?.kickAt(event.position, strength: 0.4),
+        child: Stack(
+          children: [
+            // 1️⃣ Background — animated beer-foam eruption
+            Positioned.fill(
+              child: BlackHoleBackground(key: _bgKey),
+            ),
+            // 2️⃣ Overlay mờ, vẫn thấy được hiệu ứng nền phía sau
+            Positioned.fill(
+              child: Container(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [
+                      primaryBlue.withOpacity(0.55),
+                      accentOrange.withOpacity(0.45),
+                    ],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
+                ),
+              ),
+            ),
+            // 3️⃣ Nội dung trang
+            SafeArea(child: bodyContent),
+          ],
         ),
-        child: SafeArea(child: bodyContent),
       ),
     );
   }

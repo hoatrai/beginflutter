@@ -211,6 +211,32 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
     );
   }
 
+  /// 🆕 "Ngày đăng" hiển thị trên card — tính từ `date_created` (thời điểm
+  /// tạo kèo), KHÁC với `time` (thời điểm diễn ra sự kiện) đã có sẵn.
+  /// Format kiểu tương đối giống các feed mạng xã hội quen thuộc: vài phút/
+  /// giờ/ngày đầu hiện dạng "X trước" cho dễ cảm nhận độ mới, còn quá cũ thì
+  /// chuyển sang ngày cụ thể (dd/MM/yyyy) cho dễ tra cứu thay vì "30 ngày
+  /// trước" mù mờ.
+  String _postedAgoText(String? dateCreatedRaw) {
+    if (dateCreatedRaw == null || dateCreatedRaw.isEmpty) return '';
+    try {
+      final created = DateTime.parse(dateCreatedRaw).toLocal();
+      final diff = DateTime.now().difference(created);
+
+      if (diff.isNegative) return ''; // phòng lệch giờ server/máy, đừng hiện số âm kỳ cục
+
+      if (diff.inMinutes < 1) return 'Vừa xong';
+      if (diff.inMinutes < 60) return '${diff.inMinutes} phút trước';
+      if (diff.inHours < 24) return '${diff.inHours} giờ trước';
+      if (diff.inDays < 7) return '${diff.inDays} ngày trước';
+
+      // Quá 1 tuần -> hiện hẳn ngày cho rõ, khỏi phải nhẩm "12 ngày trước" là ngày nào.
+      return DateFormat("dd/MM/yyyy").format(created);
+    } catch (_) {
+      return '';
+    }
+  }
+
   Future<void> fetchHostStats(String userId) async {
     if (hostStatsMap.containsKey(userId)) return;
 
@@ -442,20 +468,29 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
   // 🔧 FIX 3: CHẠY SONG SONG CÁC TÁC VỤ ĐỘC LẬP THAY VÌ TUẦN TỰ
   // ============================================================
   Future<void> _initFlow() async {
-    // 1. Load userId + findingStatus + blocked list song song, nhẹ
+    // 🔧 FIX "trang shop load rất lâu": TRƯỚC ĐÂY fetchProducts() (API
+    // danh sách kèo — thứ quan trọng nhất, quyết định user thấy gì đầu
+    // tiên) phải CHỜ 3 tác vụ phụ (_loadMyUserId, loadFindingStatus,
+    // fetchBlockedUsers) chạy xong HOÀN TOÀN mới bắt đầu, dù nó không hề
+    // phụ thuộc vào kết quả của 3 cái đó. Nếu 1 trong 3 API phụ chậm (dù
+    // đã thêm timeout 8s ở fetchBlockedUsers/loadFindingStatus), người
+    // dùng vẫn phải chờ thêm y hệt từng đó giây trước khi thấy được kèo
+    // nào, dù backend shop-feed có khi đã trả lời xong từ lâu.
+    // Giờ: gộp CẢ 4 vào 1 Future.wait duy nhất — chạy thật sự song song,
+    // ai xong trước không phải chờ ai. isFindingKeo (từ loadFindingStatus)
+    // vẫn được đảm bảo có giá trị đúng trước bước 3 bên dưới vì
+    // Future.wait chỉ trả về khi CẢ 4 đã xong.
     await Future.wait([
       _loadMyUserId(),
       loadFindingStatus(),
       fetchBlockedUsers(), // 🆕
+      fetchProducts(),
     ]);
 
     // 2. Xin quyền vị trí ngầm (không chặn UI)
     _requestLocationOnFirstLoad();
 
-    // 3. Load products KHÔNG chờ creator/invite
-    await fetchProducts();
-
-    // 4. Các tác vụ phụ chạy sau khi UI đã hiện
+    // 3. Các tác vụ phụ chạy sau khi UI đã hiện
     fetchChatCount();
     connectSocket();
 
@@ -641,10 +676,18 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
   Future<void> fetchBlockedUsers() async {
     try {
       final token = await StorageHelper.read("jwt_token") ?? "";
+      // 🔧 FIX "trang shop load rất lâu": TRƯỚC ĐÂY http.get() ở đây KHÔNG
+      // có timeout, trong khi hàm này nằm trong Future.wait([...]) chạy
+      // TRƯỚC fetchProducts() ở _initFlow() — nếu backend chậm/đứng dù chỉ
+      // 1 lần, cả trang Shop bị treo chờ theo (không giới hạn thời gian),
+      // dù API danh sách kèo (shop-feed) có khi đã sẵn sàng từ lâu. Thêm
+      // timeout 8s, đồng bộ tinh thần với fetchProducts() (12s) — lỗi ở
+      // đây chỉ ảnh hưởng danh sách chặn (ít quan trọng hơn danh sách kèo),
+      // nên timeout ngắn hơn là hợp lý.
       final res = await http.get(
         Uri.parse("${AppConfig.webDomain}/wp-json/nhau/v1/blocked-list"),
         headers: {"Authorization": "Bearer $token"},
-      );
+      ).timeout(const Duration(seconds: 8));
       if (res.statusCode == 200) {
         final data = jsonDecode(res.body);
         if (data['success'] == true) {
@@ -903,7 +946,10 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
           "${AppConfig.webDomain}/wp-json/custom/v1/finding-keo/status?user_id=$userId"
       );
 
-      final res = await http.get(url);
+      // 🔧 FIX "trang shop load rất lâu": cùng lý do như fetchBlockedUsers()
+      // — hàm này cũng nằm trong Future.wait([...]) chạy TRƯỚC
+      // fetchProducts() ở _initFlow(), nhưng TRƯỚC ĐÂY không có timeout.
+      final res = await http.get(url).timeout(const Duration(seconds: 8));
       if (res.statusCode == 200) {
         final data = jsonDecode(res.body);
         debugPrint("🕐 status response: ${res.body}");
@@ -1694,6 +1740,65 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
     });
   }
 
+  /// 🆕 Chuyển đổi 1 item trả về từ /nhau/v1/shop-feed sang ĐÚNG shape mà
+  /// phần còn lại của trang (card builder, dùng product['meta']['...'],
+  /// product['images']...) đang đọc — giữ tương thích với parseProduct()
+  /// cũ (dùng cho luồng WebSocket 'new_product' riêng, KHÔNG đụng vào),
+  /// chỉ khác nguồn dữ liệu đầu vào đã được backend gộp sẵn creator/host
+  /// stats/invite status, không cần tự suy ra từ meta_data nữa.
+  Map<String, dynamic> _parseShopFeedItem(Map<String, dynamic> item) {
+    final meta = Map<String, dynamic>.from(item['meta'] ?? {});
+    final images = <Map<String, String>>[];
+    if (item['images'] is List) {
+      for (var img in item['images']) {
+        if (img is Map && img['src'] != null) {
+          images.add({'src': img['src'].toString()});
+        }
+      }
+    }
+
+    // 🔧 FIX: card builder phía dưới (video fallback từ meta 'videos' +
+    // priceRange) vẫn đọc product['meta_data'] theo shape List<{key,value}>
+    // kiểu WC REST cũ — /nhau/v1/shop-feed chỉ trả 'meta' dạng Map nên
+    // meta_data trước đây LUÔN rỗng, khiến: (1) card không có
+    // party_media_video_url nhưng có video ở meta['videos'] thì mất video,
+    // hiện ảnh thay thế; (2) priceRange luôn đọc null -> hiện "Miễn phí"
+    // sai cho mọi kèo có phí. Build lại meta_data từ 'meta' để 2 chỗ đó
+    // tiếp tục hoạt động đúng như trước, không cần sửa lại logic card.
+    // 🔧 FIX #2 (type error): downstream code gọi
+    // metaData.firstWhere(..., orElse: () => null) — orElse trả null chỉ
+    // hợp lệ khi kiểu phần tử của list là dynamic. Nếu dùng .toList() từ
+    // closure trả Map<String,dynamic>, Dart tạo ra List<Map<String,
+    // dynamic>> THẬT SỰ ở runtime (generic reified), khiến orElse bắt
+    // buộc phải trả Map thay vì null -> crash "() => Null is not a
+    // subtype of (() => Map<String,dynamic>)? of orElse". Dùng
+    // List<dynamic>.from() để ép kiểu phần tử về dynamic như hành vi cũ
+    // (product['meta_data'] as List? ?? []) trước khi có field này.
+    final List<dynamic> metaData = List<dynamic>.from(
+      meta.entries.map((e) => {'key': e.key, 'value': e.value}),
+    );
+
+    return {
+      'id': item['id'],
+      'name': item['name'] ?? '',
+      'price': item['price'],
+      'description': item['description'] ?? '',
+      'date_created': item['date_created'],
+      'images': images,
+      'meta': meta,
+      'meta_data': metaData,
+      'category_names': item['category_names'] ?? '',
+      'party_media_image_url': item['party_media_image_url']?.toString() ?? '',
+      'party_media_video_url': item['party_media_video_url']?.toString() ?? '',
+      'participants': const [],
+      'joined_count': (item['invite']?['joined_count']) ?? 0,
+      'distanceKm': item['distance_km'],
+      'distanceText': item['distance_text'] ?? '',
+      'creatorName': item['creator_name'] ?? '...',
+      'creatorAvatar': item['creator_avatar'] ?? '',
+    };
+  }
+
   /// 🔑 Điểm DUY NHẤT để reset trạng thái list + gọi load lại từ đầu.
   /// Mọi nơi cần "load lại từ đầu" (đổi filter, có GPS mới, pull-to-refresh,
   /// retry lỗi...) đều phải đi qua đây, KHÔNG tự tay reset page/hasMore/
@@ -1714,10 +1819,15 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
     return fetchProducts();
   }
 
+  /// 🆕 TOÀN BỘ logic load trang shop giờ đi qua ĐÚNG 1 endpoint backend
+  /// (/nhau/v1/shop-feed) thay vì wc/v3/products + tự lọc hết hạn/chặn/
+  /// khoảng cách ở Flutter + thêm 4 request phụ (products-status,
+  /// invite/by-products, profile/v1/users, user-stats-bulk) sau mỗi trang.
+  /// Xem giải thích đầy đủ (kể cả bug "lúc ẩn lúc hiện" do 2 hàm lọc
+  /// đóng/đầy cũ mâu thuẫn nhau) ở đầu file shop-feed.php phía backend.
   Future<void> fetchProducts() async {
     if (!hasMore || _loadingMore) return;
-    debugPrint("🔄 fetchProducts page=$page emptyCount=$_emptyPageCount hasMore=$hasMore");
-    if (!hasMore || _loadingMore) return;
+    debugPrint("🔄 fetchProducts page=$page hasMore=$hasMore");
 
     final isFirstPage = page == 1;
     // 📌 chụp lại token NGAY tại thời điểm bắt đầu gọi — nếu có 1 lần
@@ -1731,58 +1841,47 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
     });
 
     try {
-      // 🆕 Đẩy category filter lên BE thay vì tải hết rồi lọc lại ở Flutter
-      // (cách cũ: BE trả 10 sp/trang bất kể category -> FE .where() lọc
-      // trong đúng 10 sp đó -> hay ra rỗng dù còn nhiều sp hợp lệ ở trang
-      // sau -> phải tự động gọi lại nhiều lần mới đủ data, rất chậm).
-      // Giờ gửi thẳng tên category cho BE lọc + phân trang luôn, per_page=10
-      // trả về là 10 sp ĐÚNG category cần, khỏi phải lọc lại lần nữa.
-      // ⚠️ Cần BE có 1 filter hook nhận param `nhau_category` (đăng ký kiểu
-      // giống hệt `nhau_sort=keo_priority` đã có trong keo-priority-sort.php),
-      // tự map tên category ("Nhậu", "Karaoke", "Bar/Pub", "Beer Club") sang
-      // tax_query cho product_cat rồi áp vào query WC trước khi trả kết quả.
+      final token = await StorageHelper.read("jwt_token") ?? "";
+
       final categoryParam = selectedCategory != null
           ? "&nhau_category=${Uri.encodeQueryComponent(selectedCategory!)}"
           : "";
+      final gpsParam = (myLat != null && myLng != null)
+          ? "&lat=$myLat&lng=$myLng&radius_km=50"
+          : "";
+
+      // 🔧 FIX BUG "load lúc được lúc mất, 'chưa diễn ra' hầu như không
+      // lên": BE sắp xếp theo priority (live -> sắp diễn ra -> chưa diễn
+      // ra) và tự tính lại mỗi 30s (cache hết hạn) vì live/sắp diễn ra
+      // phụ thuộc thời gian hiện tại -> thứ tự danh sách ĐỔI giữa các lần
+      // cuộn (user cuộn thường lâu hơn 30s). Trước đây gửi `page` (offset
+      // cố định) nên khi list bị xáo lại, offset cũ trỏ nhầm chỗ: kèo bị
+      // lặp lại (dedup ở dưới tự xoá -> cảm giác không có gì mới) hoặc bị
+      // nhảy qua vĩnh viễn — rõ nhất với "chưa diễn ra" vì luôn nằm cuối,
+      // rất dễ rơi ra ngoài mọi offset khi khối live/sắp diễn ra phía
+      // trước phình/co theo thời gian thực.
+      // Giờ gửi thẳng toàn bộ id ĐÃ có trong `products` (exclude_ids) để
+      // BE tự loại chúng ra khỏi danh sách MỚI NHẤT rồi lấy tiếp per_page
+      // món còn lại theo đúng thứ tự hiện tại — dù list bị xáo thế nào,
+      // id đã tải không bao giờ bị trả lại lần 2, và id chưa tải chắc
+      // chắn sẽ lọt vào 1 lần gọi kế tiếp.
+      final excludeIds = products.map((p) => p['id'].toString()).join(',');
+      final excludeParam =
+      excludeIds.isNotEmpty ? "&exclude_ids=$excludeIds" : "";
 
       final url = Uri.parse(
-        "${AppConfig.webDomain}/wp-json/wc/v3/products"
-            "?status=publish&per_page=10&page=$page"
-            "&orderby=date&order=desc"
-        // 🆕 Yêu cầu backend tự sort theo tiêu chí "live đông người ->
-        // live -> sắp diễn ra -> chưa tới" (xem filter
-        // nhau_apply_keo_priority_sort trong keo-priority-sort.php).
-        // Chỉ khi có param này backend mới đổi thứ tự — các chỗ khác
-        // trong app gọi thẳng wc/v3/products (vd. _loadInvites()) không
-        // truyền param này nên không bị ảnh hưởng.
-            "&nhau_sort=keo_priority"
+        "${AppConfig.webDomain}/wp-json/nhau/v1/shop-feed"
+            "?page=$page&per_page=10"
             "$categoryParam"
-        // 🚀 CHỈ lấy field cần dùng ở shop page thay vì cả schema WC
-        // (description, attributes, variations, links...) → JSON nhẹ
-        // hơn đáng kể, parse nhanh hơn, tốn ít băng thông hơn.
-            "&_fields=id,name,price,images,meta_data,categories,date_created,party_media_image_url,party_media_video_url,description"
-            "&consumer_key=ck_3809ad31dd47ca7d10573e35ccdf746494b305a9"
-            "&consumer_secret=cs_a49b903ddc7972646359f360d79343cd1e33b6f8",
+            "$gpsParam"
+            "$excludeParam",
       );
-      // ✅ MỚI - thêm after để chỉ lấy kèo mới tạo trong 2 ngày gần đây
-      /*final twoDaysAgo = DateTime.now().subtract(const Duration(days: 2));
-      final afterDate = "${twoDaysAgo.year}-${twoDaysAgo.month.toString().padLeft(2,'0')}-${twoDaysAgo.day.toString().padLeft(2,'0')}T00:00:00";
-
-      final url = Uri.parse(
-        "${AppConfig.webDomain}/wp-json/wc/v3/products"
-            "?status=publish&per_page=10&page=$page"
-            "&orderby=date&order=desc"
-            "&after=$afterDate"  // ✅ chỉ lấy kèo tạo trong 2 ngày gần đây
-            "&consumer_key=ck_3809ad31dd47ca7d10573e35ccdf746494b305a9"
-            "&consumer_secret=cs_a49b903ddc7972646359f360d79343cd1e33b6f8",
-      );*/
 
       // 🆕 FIX: có timeout để KHÔNG treo loading vô thời hạn nếu backend
-      // chậm/đứng (vd. lúc keo-priority-sort phải tính lại toàn bộ danh
-      // sách). Timeout xong sẽ rơi vào catch bên dưới -> loading=false,
+      // chậm/đứng. Timeout xong sẽ rơi vào catch bên dưới -> loading=false,
       // hasError=true, thay vì spinner đứng mãi không có điểm dừng.
       final response = await http
-          .get(url)
+          .get(url, headers: {"Authorization": "Bearer $token"})
           .timeout(const Duration(seconds: 12));
 
       // ✅ có 1 lần _restartFetch() mới hơn xen vào trong lúc chờ response
@@ -1799,149 +1898,106 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
         return;
       }
 
-      final List newProducts = json.decode(response.body);
+      final decoded = json.decode(response.body);
+      if (decoded['success'] != true) {
+        setState(() {
+          loading = false;
+          _loadingMore = false;
+          hasMore = false;
+          hasError = true;
+        });
+        return;
+      }
 
-      // ✅ Check hasMore từ API TRƯỚC khi filter
-      final bool apiHasMore = newProducts.length >= 10;
+      final List rawItems = decoded['data'] ?? [];
+      final bool apiHasMore = decoded['has_more'] == true;
 
       final List<Map<String, dynamic>> parsedProducts = [];
-      final Set<String> creatorIds = {};
 
-      for (var p in newProducts) {
-        final productMap = parseProduct(p);
+      for (var raw in rawItems) {
+        final item = Map<String, dynamic>.from(raw);
+        final productMap = _parseShopFeedItem(item);
 
-        // Lọc hết hạn
-        final timeString = productMap['meta']['time']?.toString() ?? '';
-        if (isExpiredInvite(timeString)) continue;
+        // Backend đã lọc hết hạn/chặn/khoảng cách/đóng — chỉ còn việc
+        // ghép thêm creator/host-stats/invite-status vào các map cache
+        // dùng chung trong trang (để card builder đọc y hệt luồng cũ).
+        final productId = int.tryParse(item['id'].toString());
+        final creatorId = item['meta']?['creator_id']?.toString() ?? '0';
 
-        // 🆕 Bỏ qua kèo của người đã bị chặn
-        final creatorId = productMap['meta']['creator_id']?.toString() ?? "0";
-        if (blockedUserIds.contains(creatorId)) continue;
-
-        // Lọc 50km + cache distance
-        try {
-          final lat = double.tryParse(productMap['meta']['lat']?.toString() ?? '');
-          final lng = double.tryParse(productMap['meta']['lng']?.toString() ?? '');
-
-          if (lat == null || lng == null) {
-            // ✅ không có tọa độ → vẫn hiện, không filter
-            productMap['distanceKm'] = null;
-            productMap['distanceText'] = "";
-          } else if (myLat != null && myLng != null) {
-            // ✅ có GPS → filter 50km
-            final distanceKm = Geolocator.distanceBetween(myLat!, myLng!, lat, lng) / 1000;
-            if (distanceKm > 50) continue;
-            productMap['distanceKm'] = distanceKm;
-            productMap['distanceText'] = "${distanceKm.toStringAsFixed(1)} km";
-          } else {
-            // ✅ chưa có GPS → hiện hết
-            // chưa có GPS → không filter, hiện hết
-            productMap['distanceKm'] = null;
-            productMap['distanceText'] = "";
-            debugPrint("⚠️ No GPS, showing product without distance filter");
+        if (creatorId != '0') {
+          creatorNames[creatorId] = item['creator_name'] ?? '...';
+          creatorAvatars[creatorId] = item['creator_avatar'] ?? '';
+          if (item['host_stats'] != null) {
+            hostStatsMap[creatorId] = item['host_stats'];
           }
-        } catch (e) {
-          productMap['distanceKm'] = null;
-          productMap['distanceText'] = "";
-          // ❌ bỏ continue — lỗi tọa độ vẫn hiện sản phẩm
         }
 
-        // Gom creator id
-        if (creatorId != "0") creatorIds.add(creatorId);
-
-        // Dùng cache nếu có
-        productMap['creatorName'] = creatorNames[creatorId] ?? '...';
-        productMap['creatorAvatar'] = creatorAvatars[creatorId] ?? '';
+        if (productId != null && item['invite'] != null) {
+          final inv = item['invite'];
+          inviteStatusMap[productId] = InviteStatus(
+            isJoined: inv['is_joined'] == true,
+            isFull: inv['is_full'] == true,
+            status: inv['status']?.toString() ?? "",
+            joinedCount: int.tryParse(inv['joined_count']?.toString() ?? "0") ?? 0,
+            maxPeople: int.tryParse(inv['max_people']?.toString() ?? "0") ?? 0,
+          );
+        }
 
         parsedProducts.add(productMap);
       }
 
-      // ❌ Đã bỏ sort theo priority (live/hot/sắp diễn ra) theo yêu cầu —
-      // giữ nguyên thứ tự trả về từ API (orderby=date&order=desc).
-      // parsedProducts.sort(_compareKeoOrder);
-
-      List<dynamic> newOnesForThisPage = [];
-
-      // 🔧 FIX: tính TRƯỚC xem trang này có bị lọc rỗng (còn API vẫn còn
-      // data) hay không -> nếu có, sắp có 1 lần fetchProducts() tự động
-      // gọi lại ngay sau đây. Biết trước điều này để KHÔNG tắt `loading`
-      // trong lúc chờ retry, tránh việc UI chớp qua _buildEmptyState()
-      // ("Chưa có kèo nào gần bạn") rồi lại quay về loading ngay sau đó.
-      final bool pageFilteredEmpty = parsedProducts.isEmpty && apiHasMore;
-      final int nextEmptyPageCount = pageFilteredEmpty ? _emptyPageCount + 1 : 0;
-      final bool willAutoRetry = pageFilteredEmpty && nextEmptyPageCount < 3;
-
-      // ✅ check lại lần nữa trước setState chính (phòng lúc parse/lọc ở
-      // trên tốn thời gian, đủ để 1 lần restart khác chen vào giữa chừng).
+      // ✅ check lại lần nữa trước setState chính (phòng lúc parse ở trên
+      // tốn thời gian, đủ để 1 lần restart khác chen vào giữa chừng).
       if (myToken != _fetchToken) return;
 
       setState(() {
         final existingIds = products.map((p) => p['id']).toSet();
         final newOnes = parsedProducts.where((p) => !existingIds.contains(p['id'])).toList();
-        newOnesForThisPage = newOnes; // 🆕 giữ lại để chỉ check status cho đúng trang này
         products.addAll(newOnes);
-        // ❌ Đã bỏ sort lại toàn bộ list theo yêu cầu — giữ nguyên thứ tự
-        // các trang được nối vào (theo ngày tạo, mới nhất trước, đúng
-        // như API trả về).
-        // products.sort(_compareKeoOrder);
 
-        // 🔧 FIX: chỉ tắt loading khi thực sự đã xong (không còn retry nào
-        // sắp chạy) — nếu không sẽ có 1 frame products rỗng + loading=false
-        // -> hiện nhầm empty state trước khi trang kế tiếp có data.
-        if (!willAutoRetry) {
-          loading = false;
-          _loadingMore = false;
-        }
-        // Nếu đã lọc rỗng 3 lần liên tiếp (nextEmptyPageCount >= 3) thì coi
-        // như thực sự hết data -> hasMore = false. Ngược lại giữ theo API.
-        hasMore = (pageFilteredEmpty && !willAutoRetry) ? false : apiHasMore;
+        loading = false;
+        _loadingMore = false;
+        hasMore = apiHasMore;
         hasError = false; // 🆕 fetch thành công thì clear error
         if (apiHasMore) page++;
         _prefetchTriggeredForPage = false; // 🆕 mở khóa để trang kế tiếp được phép prefetch
-        _emptyPageCount = nextEmptyPageCount;
+        _emptyPageCount = 0;
       });
 
       debugPrint("✅ parsedProducts.length = ${parsedProducts.length}, apiHasMore=$apiHasMore, page=$page");
-
-      // ✅ Nếu trang này filter ra 0 nhưng API còn data → tự fetch trang tiếp
-      if (willAutoRetry) {
-        await Future.delayed(const Duration(milliseconds: 300));
-        // ✅ nếu trong lúc chờ 300ms này có 1 lần restart khác xen vào thì
-        // đừng tự retry chuỗi cũ nữa — để lần restart mới tự lo request nó.
-        if (mounted && hasMore && myToken == _fetchToken) fetchProducts();
-      }
-
-      // Fetch creator + invite sau khi UI hiện
-      // Fetch creator + lọc kèo đã đóng sau khi UI hiện
-      // Fetch creator + badge slot + lọc kèo đã đóng sau khi UI hiện
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted) return;
-        Future.wait([
-          fetchCreatorsBulk(creatorIds.toList()),
-          // 🆕 host stats (điểm uy tín, số kèo đã tổ chức...) cho tất cả
-          // creator của trang này trong 1 request duy nhất — thay vì mỗi
-          // card tự bắn request riêng lúc build (xem itemBuilder bên dưới).
-          fetchHostStatsBulk(creatorIds.toList()),
-          // 🆕 FIX: chỉ check status cho các id vừa thêm ở trang này, không
-          // gửi lại toàn bộ products đã tải (trước đây products.map(...) lấy
-          // TOÀN BỘ list -> request phình to dần theo mỗi lần load-more).
-          filterClosedProducts(
-            newOnesForThisPage.map((p) => p['id'].toString()).toList(),
-          ),
-          Future(() => preloadInviteStatuses()),   // giữ badge "Còn X slots"
-        ]);
-      });
 
     } catch (e) {
       debugPrint("❌ fetchProducts error: $e");
       // ✅ lỗi của 1 request đã lỗi thời (bị token mới đè lên) — đừng dùng
       // nó để set hasError, vì lần restart sau nó mới là "sự thật" hiện tại.
       if (myToken != _fetchToken) return;
+      // 🔧 FIX "load chưa hết mà đã dừng vĩnh viễn": TRƯỚC ĐÂY lỗi ở nhánh
+      // này (network exception / TimeoutException khi mạng chậm, đang bận
+      // tải video/ảnh song song...) bị coi ngang hàng với "server xác nhận
+      // hết dữ liệu" — set cứng hasMore = false. Từ đó về sau fetchProducts()
+      // luôn return sớm ở dòng `if (!hasMore || _loadingMore) return;`, nên
+      // dù mạng có ổn định lại, cuộn thêm cũng không bao giờ gọi lại API nữa,
+      // trong khi backend thực ra vẫn còn rất nhiều dữ liệu (đã xác nhận qua
+      // debug_counts=1 lẫn log TimeoutException thực tế).
+      //
+      // GIỜ: lỗi mạng/timeout chỉ là sự cố THOÁNG QUA — không đại diện cho
+      // "đã hết trang", nên KHÔNG đụng vào hasMore ở đây nữa. Giữ nguyên
+      // hasMore như trước lúc gọi (nếu đang true thì vẫn true) để lần cuộn
+      // tiếp theo (hoặc nút "thử lại" ở _buildErrorState) còn có cơ hội gọi
+      // lại fetchProducts() bình thường.
+      //
+      // Nhánh statusCode != 200 / success != true phía trên (phản hồi THẬT
+      // từ server) thì vẫn giữ nguyên hasMore = false như cũ, vì đó là tín
+      // hiệu dứt khoát hơn hẳn một exception mạng.
       setState(() {
         loading = false;
         _loadingMore = false;
-        hasMore = false;
-        hasError = true; // 🆕
+        hasError = true; // 🆕 vẫn báo lỗi để UI hiện nút "thử lại" nếu cần
+        // 🔧 mở khóa lại prefetch-theo-index (xem comment ở chỗ đặt cờ này
+        // trong itemBuilder) — nếu không reset, sau 1 lần timeout thì kiểu
+        // trigger "còn ~3 card cuối" sẽ im re vĩnh viễn, chỉ còn mỗi kiểu
+        // trigger "cuộn sát đáy" (ScrollEndNotification) hoạt động.
+        _prefetchTriggeredForPage = false;
       });
     }
   }
@@ -4148,7 +4204,10 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
         .where((s) => s.isNotEmpty)
         .toList();
 
-    Widget videoMainCell() => _CardVideoPreview(url: videoUrl);
+    // 🔧 FIX: key theo url để nếu widget vẫn bị Flutter tái sử dụng ở đâu
+    // đó (ví dụ thiếu key ở tầng cha), State cũng buộc phải tạo lại thay
+    // vì giữ nguyên VideoPlayerController của url cũ.
+    Widget videoMainCell() => _CardVideoPreview(key: ValueKey(videoUrl), url: videoUrl);
 
     // 🆕 FIX: giới hạn decode theo kích thước hiển thị thực tế (x dpr),
     // giống HeroProductImage/mainCell — trước đây subCell không set
@@ -4970,6 +5029,10 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
                               isNew = DateTime.now().difference(created).inHours <= 6;
                             } catch (_) {}
 
+                            // 🆕 Ngày đăng (khác `time` là ngày DIỄN RA sự kiện ở trên).
+                            final String postedAgo =
+                            _postedAgoText(product['date_created']?.toString());
+
                             final String creatorId = meta['creator_id']?.toString() ?? "0";
 
                             // Host stats giờ được nạp SẴN theo lô cho cả trang
@@ -5059,6 +5122,16 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
                             _getCategoryGradient(categories);
 
                             return GestureDetector(
+                              // 🔧 FIX "load lung tung": ListView.builder trước đây
+                              // không có key riêng cho từng card -> khi list thay
+                              // đổi (trang mới, kèo mới qua WebSocket...), Flutter
+                              // tái sử dụng State theo VỊ TRÍ thay vì theo sản
+                              // phẩm, khiến VideoPlayerController/State của
+                              // _CardVideoPreview bị gán nhầm cho card khác lúc
+                              // cuộn -> video/ảnh hiện sai, giật, đảo lộn xộn.
+                              // Gắn key theo product id để Flutter luôn khớp
+                              // đúng State với đúng sản phẩm.
+                              key: ValueKey('shop-card-${product["id"]}'),
                               onTap: () async {
                                 final userId = await StorageHelper.read("user_id") ?? "0";
 
@@ -5606,6 +5679,11 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
                                                                     creatorName,
                                                                     style: const TextStyle(fontSize: 12, color: Colors.white, fontWeight: FontWeight.w700),
                                                                   ),
+                                                                  if (postedAgo.isNotEmpty)
+                                                                    Text(
+                                                                      "\u2022 \u0110\u0103ng $postedAgo",
+                                                                      style: const TextStyle(fontSize: 10.5, color: Colors.white54, fontWeight: FontWeight.w500),
+                                                                    ),
                                                                   _statChip("\u2B50 ${userStats?['attendance_percent'] ?? 0}%", categoryColor),
                                                                   _statChip("\u{1F9FE} ${userStats?['total_keo'] ?? 0}", categoryColor),
                                                                   _statChip("\u{1F3AF} ${userStats?['real_join_percent'] ?? 0}%", categoryColor),
@@ -6280,7 +6358,7 @@ class _VideoPlaybackLimiter {
 
 class _CardVideoPreview extends StatefulWidget {
   final String url;
-  const _CardVideoPreview({required this.url});
+  const _CardVideoPreview({super.key, required this.url});
 
   @override
   State<_CardVideoPreview> createState() => _CardVideoPreviewState();

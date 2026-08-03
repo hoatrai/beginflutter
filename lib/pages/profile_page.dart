@@ -11,6 +11,7 @@ import '../config/app_config.dart';
 import 'privacy_policy_page.dart';
 import 'terms_of_service_page.dart';
 import 'user_list_page.dart';
+import 'beer_background.dart';
 
 
 class ProfilePage extends StatefulWidget {
@@ -287,6 +288,13 @@ class _ProfilePageState extends State<ProfilePage> {
   Map<String, dynamic>? _userData;
   bool _loading = true;
   String? _errorMessage;
+
+  // GlobalKey để gọi thẳng BlackHoleBackgroundState.kickAt(...) từ Listener
+  // ngoài cùng — nội dung trang nằm đè lên trên nên bình thường sẽ nuốt
+  // hết mọi sự kiện chạm trước khi nó lọt xuống GestureDetector bên trong
+  // background.
+  final GlobalKey<BlackHoleBackgroundState> _bgKey =
+  GlobalKey<BlackHoleBackgroundState>();
 
   // Theme colors
   // 🆕 Thử đổi sang đúng tông màu của my_keo_page (Colors.blue.shade900 /
@@ -970,35 +978,54 @@ class _ProfilePageState extends State<ProfilePage> {
     }
 
     return Scaffold(
-      body: Container(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            colors: [primaryBlue.withOpacity(0.9), accentOrange.withOpacity(0.8)],
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-          ),
-        ),
-        child: SafeArea(
-          child: Column(
-            children: [
-              const SizedBox(height: 20),
-              ShaderMask(
-                shaderCallback: (bounds) => const LinearGradient(
-                  colors: [Colors.orange, Colors.red],
-                ).createShader(bounds),
-                child: const Text(
-                  "Thông tin tài khoản",
-                  style: TextStyle(
-                    fontSize: 22,
-                    fontWeight: FontWeight.bold,
-                    color: Colors.white,
+      body: Listener(
+        behavior: HitTestBehavior.translucent,
+        onPointerDown: (event) => _bgKey.currentState?.kickAt(event.position),
+        onPointerMove: (event) =>
+            _bgKey.currentState?.kickAt(event.position, strength: 0.4),
+        child: Stack(
+          children: [
+            // 1️⃣ Background — animated starfield + drifting black hole
+            Positioned.fill(
+              child: BlackHoleBackground(key: _bgKey),
+            ),
+            // 2️⃣ Overlay mờ (giảm opacity so với bản gradient đặc cũ để
+            // vẫn thấy được hiệu ứng nền phía sau)
+            Positioned.fill(
+              child: Container(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [primaryBlue.withOpacity(0.55), accentOrange.withOpacity(0.45)],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
                   ),
                 ),
               ),
-              const SizedBox(height: 10),
-              Expanded(child: bodyContent),
-            ],
-          ),
+            ),
+            // 3️⃣ Nội dung trang
+            SafeArea(
+              child: Column(
+                children: [
+                  const SizedBox(height: 20),
+                  ShaderMask(
+                    shaderCallback: (bounds) => const LinearGradient(
+                      colors: [Colors.orange, Colors.red],
+                    ).createShader(bounds),
+                    child: const Text(
+                      "Thông tin tài khoản",
+                      style: TextStyle(
+                        fontSize: 22,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Expanded(child: bodyContent),
+                ],
+              ),
+            ),
+          ],
         ),
       ),
     );
