@@ -329,9 +329,9 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
 
       inviteStatusMap[productId] = invite;
 
-      final bool isClosed = invite.isFull ||
-          invite.status == "closed" ||
-          invite.status == "full" ||
+      // 🐛 FIX cùng bug: bỏ "invite.isFull ||" — kèo đầy chỗ vẫn phải
+      // hiện, chỉ loại khi status thật sự đóng (xem shop-feed.php).
+      final bool isClosed = invite.status == "closed" ||
           invite.status == "done";
 
       // 🆕 THÊM DÒNG NÀY
@@ -1616,17 +1616,24 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
       final productId = payload['id'];
       if (productId == null) return;
 
-      // Fetch chi tiết product từ REST API
+      // 🆕 FIX HIỆU NĂNG: trước đây gọi thẳng wc/v3/products/{id} (nặng —
+      // serialize toàn bộ schema WooCommerce: attributes, variations,
+      // dimensions, shipping_class, _links... chỉ để lấy vài field hiện
+      // trên card) rồi tự parse bằng parseProduct(). Giờ dùng
+      // nhau/v1/product-lite — CÙNG SHAPE với item của /nhau/v1/shop-feed
+      // (kể cả date_created đã đúng +07:00 sẵn), nên tái dùng thẳng
+      // _parseShopFeedItem() luôn, không cần giữ 2 parser khác nhau nữa.
       final url = Uri.parse(
-        "${AppConfig.webDomain}/wp-json/wc/v3/products/$productId"
-            "?consumer_key=ck_3809ad31dd47ca7d10573e35ccdf746494b305a9"
-            "&consumer_secret=cs_a49b903ddc7972646359f360d79343cd1e33b6f8",
+        "${AppConfig.webDomain}/wp-json/nhau/v1/product-lite?id=$productId",
       );
       final response = await http.get(url);
 
       if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        final productMap = parseProduct(data);
+        final body = jsonDecode(response.body);
+        final item = body['data'];
+        if (item == null) return;
+
+        final productMap = _parseShopFeedItem(Map<String, dynamic>.from(item));
 
         // Lấy creator
         final creatorId = productMap['meta']['creator_id']?.toString() ?? "0";
@@ -1934,13 +1941,38 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
 
         if (productId != null && item['invite'] != null) {
           final inv = item['invite'];
-          inviteStatusMap[productId] = InviteStatus(
+          final inviteStatus = InviteStatus(
             isJoined: inv['is_joined'] == true,
             isFull: inv['is_full'] == true,
             status: inv['status']?.toString() ?? "",
             joinedCount: int.tryParse(inv['joined_count']?.toString() ?? "0") ?? 0,
             maxPeople: int.tryParse(inv['max_people']?.toString() ?? "0") ?? 0,
           );
+
+          // 🆕 FIX: nếu invite data đi kèm sẵn trong shop-feed đã cho biết
+          // kèo này đóng/xong rồi, thì đừng thêm vào `products` luôn —
+          // trước đây chỗ này chỉ lưu status vào map chứ không loại bỏ, nên
+          // 1 kèo đã đóng vẫn lọt vào feed và nằm ì trong đó cho tới khi có
+          // request riêng (vốn cũng không ai gọi tới) phát hiện ra và xoá.
+          //
+          // 🐛 FIX BUG "chưa có kèo nào gần bạn" dù backend vẫn còn data:
+          // TRƯỚC ĐÂY có "inviteStatus.isFull ||" ở đây — tự loại luôn cả
+          // kèo ĐẦY CHỖ, ngược hoàn toàn với quy tắc backend đã ghi rõ ở
+          // đầu shop-feed.php ("chỉ ẩn khi đóng, KHÔNG ẩn khi đầy" — đầy
+          // chỗ vẫn phải hiện, phòng khi có người rời đi). Khi phần lớn
+          // kèo đang mở đã đầy chỗ (max_people nhỏ, dễ đầy), điều kiện cũ
+          // này lọc sạch toàn bộ feed ngay tại bước parse, trước khi kịp
+          // hiển thị — KHÔNG liên quan gì tới dữ liệu DB (DB vẫn còn kèo
+          // open bình thường). Giờ chỉ loại đúng khi status thật sự đóng.
+          final bool isClosed = inviteStatus.status == "closed" ||
+              inviteStatus.status == "done";
+
+          if (isClosed) {
+            inviteStatusMap.remove(productId);
+            continue;
+          }
+
+          inviteStatusMap[productId] = inviteStatus;
         }
 
         parsedProducts.add(productMap);
@@ -1963,6 +1995,15 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
         _prefetchTriggeredForPage = false; // 🆕 mở khóa để trang kế tiếp được phép prefetch
         _emptyPageCount = 0;
       });
+
+      // 🆕 FIX "kèo đã đóng tự động mở lại": sau mỗi lần thêm sản phẩm mới
+      // vào list (kể cả sau pull-to-refresh, lúc exclude_ids bị reset về
+      // rỗng và backend có thể trả lại 1 kèo vừa đóng do cache 30s chưa kịp
+      // cập nhật), CHỦ ĐỘNG re-check invite-status của các id mới này rồi
+      // tự xoá khỏi `products` nếu đã đóng/đầy — thay vì để im, vì trước
+      // đây hàm check status này được viết ra nhưng không có nơi nào gọi
+      // tới, nên kèo đã đóng không bao giờ được tự dọn khỏi feed.
+      preloadInviteStatuses();
 
       debugPrint("✅ parsedProducts.length = ${parsedProducts.length}, apiHasMore=$apiHasMore, page=$page");
 
@@ -4564,9 +4605,10 @@ class _ShopPageState extends State<ShopPage> with WidgetsBindingObserver {
 
         inviteStatusMap[productId] = invite;
 
-        final bool isClosed = invite.isFull ||
-            invite.status == "closed" ||
-            invite.status == "full" ||
+        // 🐛 FIX cùng bug với fetchProducts(): bỏ "invite.isFull ||" —
+        // kèo đầy chỗ vẫn phải hiện trong feed (xem quy tắc ở đầu
+        // shop-feed.php), không phải tín hiệu để xoá khỏi `products`.
+        final bool isClosed = invite.status == "closed" ||
             invite.status == "done";
 
         if (isClosed) closedProductIds.add(productId);
@@ -6009,68 +6051,34 @@ class _InviteListPopupState extends State<InviteListPopup> {
     super.initState();
     _loadInvites();
   }
-  String _extractMeta(List<dynamic>? meta, String key) {
-    if (meta == null) return "";
-
-    try {
-      final item = meta.firstWhere(
-            (m) => m['key'] == key,
-        orElse: () => null,
-      );
-
-      if (item == null) return "";
-      return item['value']?.toString() ?? "";
-    } catch (e) {
-      return "";
-    }
-  }
-
   Future<void> _loadInvites() async {
     try {
-      final myUserId = await StorageHelper.read("user_id") ?? "0";
+      // 🆕 FIX HIỆU NĂNG + ĐÚNG DỮ LIỆU: trước đây tải NGUYÊN 20 sản phẩm
+      // MỚI NHẤT qua wc/v3/products (nặng — toàn bộ schema WooCommerce)
+      // rồi TỰ LỌC client-side theo creator_id === user hiện tại — nếu
+      // user có kèo cũ hơn 20 sản phẩm mới nhất của CẢ HỆ THỐNG thì kèo
+      // đó bị rớt mất, không phải chỉ là vấn đề tốc độ. Giờ gọi thẳng
+      // endpoint lọc theo host_id ở backend (bảng invites), trả đúng và
+      // đủ toàn bộ kèo đang mở của user này, luôn đúng shape cần dùng
+      // (id, title, time, image) — không cần map lại nữa.
+      final token = await StorageHelper.read("jwt_token") ?? "";
 
       final url = Uri.parse(
-        "${AppConfig.webDomain}/wp-json/wc/v3/products"
-            "?per_page=20"
-            "&status=publish"
-            "&consumer_key=ck_3809ad31dd47ca7d10573e35ccdf746494b305a9"
-            "&consumer_secret=cs_a49b903ddc7972646359f360d79343cd1e33b6f8",
+        "${AppConfig.webDomain}/wp-json/nhau/v1/my-open-keo-lite",
       );
 
-      final res = await http.get(url);
+      final res = await http.get(
+        url,
+        headers: {"Authorization": "Bearer $token"},
+      );
       if (res.statusCode != 200) {
         throw "HTTP ${res.statusCode}";
       }
 
-      final List list = jsonDecode(res.body);
+      final body = jsonDecode(res.body);
+      final List list = body['data'] ?? [];
 
-      final myInvites = list.where((p) {
-        final meta = (p['meta_data'] ?? []) as List;
-
-        String creatorId = "0";
-
-        for (final m in meta) {
-          if (m['key'] == 'creator_id') {
-            creatorId = m['value']?.toString() ?? "0";
-            break;
-          }
-        }
-
-        return creatorId == myUserId;
-      }).map((p) {
-        final images = (p['images'] ?? []) as List;
-        final imageUrl = images.isNotEmpty ? images.first['src'] : null;
-
-        return {
-          "id": p['id'],
-          "title": p['name'],
-          "time": _extractMeta(p['meta_data'], 'time'),
-          "image": imageUrl, // 👈 thêm image
-        };
-      }).toList();
-
-
-      invites = myInvites;
+      invites = list.map((p) => Map<String, dynamic>.from(p)).toList();
     } catch (e) {
       debugPrint("❌ Load invite error: $e");
       invites = [];

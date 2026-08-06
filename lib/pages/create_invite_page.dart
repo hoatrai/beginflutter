@@ -468,6 +468,20 @@ class _CreateInvitePageState extends State<CreateInvitePage> with TickerProvider
       'type': 'simple',
       'regular_price': _priceController.text.isEmpty ? '0' : _priceController.text.replaceAll(',', ''),
       'description': _descriptionController.text,
+      // 🐛 FIX "vừa tạo đã báo 7h trước": TRƯỚC ĐÂY không gửi date_created,
+      // để WooCommerce tự set post_date theo logic nội bộ của nó — không
+      // đảm bảo ra ĐÚNG giờ VN local (+07:00). Trong khi đó phần HIỂN THỊ
+      // (shop-feed.php, product-lite.php) lại đọc thẳng post_date rồi tự
+      // gắn cứng "+07:00" vào, với giả định post_date đã LÀ giờ VN local
+      // sẵn (xem comment "đọc thẳng post_date... không qua WC datetime
+      // machinery" trong shop-feed.php). Nếu 2 giả định này lệch nhau
+      // (WC ghi post_date theo GMT thay vì VN local), ngày hiển thị bị
+      // lùi đúng 7 tiếng ngay khi vừa tạo — đúng bằng UTC offset của VN.
+      // Giờ gửi tường minh date_created = giờ thiết bị hiện tại (định
+      // dạng ISO không kèm offset — WooCommerce REST hiểu chuỗi này là
+      // giờ LOCAL theo timezone site), để post_date luôn đúng giờ VN
+      // ngay từ lúc tạo, không phụ thuộc WooCommerce tự đoán/mặc định.
+      'date_created': DateFormat("yyyy-MM-ddTHH:mm:ss").format(DateTime.now()),
       'categories': [
         if (_selectedType != null) {'id': _selectedType!.id},
         if (_selectedArea != null) {'id': _selectedArea!.id},

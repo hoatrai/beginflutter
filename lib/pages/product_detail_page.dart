@@ -29,6 +29,7 @@ import '../helpers/user_helper.dart';
 import 'group_chat_page.dart';
 import 'invite_map_page.dart';
 import 'newsfeed_page.dart';
+import 'beer_video_feed_page.dart';
 import 'spin_wheel.dart';
 import '../config/app_config.dart';
 import '../app_globals.dart';
@@ -154,6 +155,7 @@ class Participant {
   final String role;
   final AttendanceStatus attendanceStatus;
   final int trustScore;
+  final DateTime? joinedAt; // 🆕 giờ join thật, null nếu server chưa trả (data cũ)
   String? avatar;
   bool isRated;
   int? myRating;
@@ -165,6 +167,7 @@ class Participant {
     required this.role,
     required this.attendanceStatus,
     required this.trustScore,
+    this.joinedAt,
     this.avatar,
     this.isRated = false,
     this.myRating,
@@ -177,6 +180,15 @@ class Participant {
     role:             m['role']?.toString() ?? '',
     attendanceStatus: AttendanceStatusExt.fromKey(m['attendance_status']?.toString()),
     trustScore:       int.tryParse(m['trust_score']?.toString() ?? '') ?? 50,
+    // 🆕 FIX lệch 7 tiếng ("7 giờ trước" dù vừa mới join): đổi sang ĐÚNG
+    // pattern đang dùng ở shop_page.dart cho started_at/expire_at (dòng
+    // ~966/979/3754 bên đó): raw.replaceFirst(' ', 'T') + 'Z' rồi mới
+    // DateTime.parse(), so trực tiếp với DateTime.now(). Bản parse
+    // "naive" trước đây ở CHÍNH FILE NÀY (không gắn 'Z') mới là nguồn
+    // gây lệch 7 tiếng trên thiết bị thật — xem
+    // _tryParseNaiveMysqlDatetime() bên dưới (giữ lại hàm cũ nhưng
+    // không dùng nữa, tránh chỗ khác trong file lỡ gọi nhầm).
+    joinedAt:         _tryParseShopPageStyleMysqlDatetime(m['joined_at']?.toString()),
     // 🆕 invite/detail giờ trả sẵn avatar_url (JOIN thẳng ở backend), khỏi
     // phải chờ round-trip enrich riêng nữa — xem _fetchParticipants().
     avatar:           m['avatar_url']?.toString(),
@@ -197,10 +209,48 @@ class Participant {
         role:             role,
         attendanceStatus: attendanceStatus ?? this.attendanceStatus,
         trustScore:       trustScore,
+        joinedAt:         joinedAt,
         avatar:           avatar ?? this.avatar,
         isRated:          isRated ?? this.isRated,
         myRating:         myRating ?? this.myRating,
       );
+}
+
+// 🆕 Parse string MySQL "Y-m-d H:i:s" (hoặc "Y-m-d\TH:i:s" phòng khi có
+// nơi khác lỡ gắn 'T') thành DateTime NAIVE — không quy đổi timezone gì
+// cả, giữ nguyên giờ VN local như server trả về, để so trực tiếp với
+// DateTime.now() của máy (cùng cách app đang parse "time"/giờ hẹn).
+DateTime? _tryParseNaiveMysqlDatetime(String? raw) {
+  if (raw == null || raw.isEmpty) return null;
+  final normalized = raw.replaceFirst('T', ' ').split('+').first.split('.').first;
+  return DateTime.tryParse(normalized); // "yyyy-MM-dd HH:mm:ss" -> Dart tự hiểu là local naive khi không có 'Z'/offset
+}
+
+// 🆕 ĐÚNG pattern đang dùng ở shop_page.dart (loadFindingStatus() +
+// _buildDiscoveryContentRow()) cho string MySQL "Y-m-d H:i:s" — gắn
+// 'Z' thủ công rồi mới parse, so trực tiếp với DateTime.now(). Dùng
+// hàm này thay cho _tryParseNaiveMysqlDatetime() ở trên để 2 trang
+// (shop + product detail) tính "x giờ trước" ra CÙNG một kết quả.
+DateTime? _tryParseShopPageStyleMysqlDatetime(String? raw) {
+  if (raw == null || raw.isEmpty) return null;
+  final normalized = raw.replaceFirst('T', ' ').split('+').first.split('.').first;
+  try {
+    return DateTime.parse(normalized.replaceFirst(' ', 'T') + 'Z');
+  } catch (_) {
+    return null;
+  }
+}
+
+// 🆕 Hiện thời gian join tương đối (giống pattern "x phút trước" quen
+// thuộc), dùng để thay chữ tĩnh "Vừa join" — trả null nếu chưa tới 1 phút
+// (vẫn còn đúng nghĩa "vừa join") để UI tự fallback về text mặc định.
+String? _relativeJoinLabel(DateTime? joinedAt) {
+  if (joinedAt == null) return null;
+  final diff = DateTime.now().difference(joinedAt);
+  if (diff.inSeconds < 60) return null; // thật sự vừa mới join
+  if (diff.inMinutes < 60) return '${diff.inMinutes} phút trước';
+  if (diff.inHours < 24) return '${diff.inHours} giờ trước';
+  return '${diff.inDays} ngày trước';
 }
 
 class MediaItem {
@@ -441,6 +491,98 @@ class _ProductDetailPageState extends State<ProductDetailPage>
     _loadJoinStatus();
     _initGameResultSound();
     _initTts();
+    // 🆕 Nhiều nơi mở trang này (card ngoài shop_page, socket new_product,
+    // newsfeed...) chỉ truyền vào Map RÚT GỌN từ API nhẹ /shop-feed hay
+    // /product-lite (backend chỉ chọn sẵn vài field đủ cho card, KHÔNG có
+    // phone/contact/zalo/facebook/note/requirements...). Gọi ngầm 1 lần
+    // để bù đủ dữ liệu — xem chi tiết ở _refetchFullProductDetails().
+    _refetchFullProductDetails();
+  }
+
+  // ==========================================================================
+  // 🆕 TỰ BÙ ĐỦ DỮ LIỆU (fix thiếu field như "Liên hệ", Zalo, Facebook...)
+  // ==========================================================================
+  // Không await trong initState (không chặn mở trang) — trang hiện ra ngay
+  // với Map rút gọn đã có, phần còn thiếu sẽ "nở" thêm ra sau khi fetch
+  // xong (thường rất nhanh, 1 request nhỏ theo đúng 1 id).
+  //
+  // CHỈ merge các field TĨNH (meta, meta_data, images, description, tên,
+  // giá, categories) — TUYỆT ĐỐI không đụng vào joined_count, participants,
+  // creatorName, creatorAvatar, distanceText, distanceKm: các field này do
+  // _loadJoinStatus() / WebSocket / backend shop-feed quản lý riêng và
+  // "tươi" hơn bất cứ gì lấy từ WooCommerce REST — ghi đè lên sẽ làm sai
+  // số người tham gia / avatar host đang hiển thị.
+  Future<void> _refetchFullProductDetails() async {
+    final productId = int.tryParse(widget.product['id']?.toString() ?? '');
+    if (productId == null) return;
+
+    try {
+      final url = Uri.parse(
+        "${AppConfig.webDomain}/wp-json/wc/v3/products/$productId"
+            "?consumer_key=ck_3809ad31dd47ca7d10573e35ccdf746494b305a9"
+            "&consumer_secret=cs_a49b903ddc7972646359f360d79343cd1e33b6f8",
+      );
+      final res = await http.get(url).timeout(const Duration(seconds: 10));
+      if (!mounted || res.statusCode != 200) return;
+
+      final raw = jsonDecode(res.body);
+      if (raw is! Map) return;
+      final full = Map<String, dynamic>.from(raw);
+
+      // meta_data (List<{key,value}>) là nguồn ĐẦY ĐỦ nhất -> field
+      // "Liên hệ"/Zalo/Facebook/Ghi chú/Yêu cầu nằm ở đây.
+      final metaDataList =
+      (full['meta_data'] is List) ? List<dynamic>.from(full['meta_data']) : <dynamic>[];
+
+      final imgs = <Map<String, String>>[];
+      if (full['images'] is List) {
+        for (final img in full['images']) {
+          if (img is Map && img['src'] != null) {
+            imgs.add({'src': img['src'].toString()});
+          }
+        }
+      }
+
+      String categoryNames = '';
+      if (full['categories'] is List) {
+        categoryNames = (full['categories'] as List)
+            .map((c) => (c is Map ? c['name'] : null)?.toString() ?? '')
+            .where((n) => n.isNotEmpty)
+            .join(', ');
+      }
+
+      if (!mounted) return;
+      setState(() {
+        if (metaDataList.isNotEmpty) {
+          widget.product['meta_data'] = metaDataList;
+        }
+        if ((full['description']?.toString() ?? '').isNotEmpty) {
+          widget.product['description'] = full['description'];
+        }
+        if (imgs.isNotEmpty) {
+          widget.product['images'] = imgs;
+        }
+        if (categoryNames.isNotEmpty) {
+          widget.product['category_names'] = categoryNames;
+          widget.product['categories'] = full['categories'];
+        }
+        // party_media_*: chỉ ghi khi WooCommerce có trả (custom REST
+        // field) và không rỗng — tránh xoá mất ảnh/video vừa upload
+        // trong phiên hiện tại hoặc đã có sẵn từ shop-feed.
+        final fullImg = full['party_media_image_url']?.toString() ?? '';
+        final fullVid = full['party_media_video_url']?.toString() ?? '';
+        if (fullImg.isNotEmpty) widget.product['party_media_image_url'] = fullImg;
+        if (fullVid.isNotEmpty) widget.product['party_media_video_url'] = fullVid;
+        if ((full['name']?.toString() ?? '').isNotEmpty) {
+          widget.product['name'] = full['name'];
+        }
+        if (full['price'] != null) widget.product['price'] = full['price'];
+      });
+    } catch (e) {
+      debugPrint('🔴 _refetchFullProductDetails lỗi: $e');
+      // Lỗi mạng/timeout -> im lặng giữ nguyên Map rút gọn đã có sẵn,
+      // không chặn hay báo lỗi trang chi tiết vì đây chỉ là bù thêm.
+    }
   }
 
   // 🔊 âm thanh "tèn ten" phát khi CÓ KẾT QUẢ ở bất kỳ trò nào trong số:
@@ -1296,11 +1438,21 @@ class _ProductDetailPageState extends State<ProductDetailPage>
   // API — MEDIA UPLOAD
   // ==========================================================================
 
-  Future<void> _pickAndUpload(String type) async {
+  // 🆕 Thêm tham số `source`: mặc định lấy từ thư viện (gallery) như cũ,
+  // truyền ImageSource.camera để mở thẳng camera máy — quay video (hoặc
+  // chụp ảnh) trực tiếp rồi đăng ngay, không cần chọn file có sẵn.
+  // Dùng chung 100% pipeline nén + upload + lưu media bên dưới với luồng
+  // "chọn từ thư viện" cũ, chỉ khác đúng nguồn lấy file.
+  Future<void> _pickAndUpload(String type, {ImageSource source = ImageSource.gallery}) async {
     final picker = ImagePicker();
     final file = type == 'video'
-        ? await picker.pickVideo(source: ImageSource.gallery)
-        : await picker.pickImage(source: ImageSource.gallery, imageQuality: 85);
+        ? await picker.pickVideo(
+      source: source,
+      maxDuration: source == ImageSource.camera
+          ? const Duration(seconds: 90)
+          : null,
+    )
+        : await picker.pickImage(source: source, imageQuality: 85);
     if (file == null) return;
 
     // 🆕 Đẩy ngay item lên ĐẦU danh sách hiển thị (trước cả _inviteMedia đã
@@ -2111,6 +2263,44 @@ class _ProductDetailPageState extends State<ProductDetailPage>
                         ),
                       ),
                     ),
+                  // 🆕 Xem TOÀN BỘ video trong thư mục BeerGoVideo (không
+                  // chỉ video của kèo này) — đặt cạnh nút "Newsfeed" vì
+                  // cùng là lối vào xem video, chỉ khác phạm vi hiển thị.
+                  GestureDetector(
+                    onTap: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => const BeerVideoFeedPage(),
+                        ),
+                      );
+                    },
+                    child: Container(
+                      margin: const EdgeInsets.only(right: 8),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: Colors.orangeAccent.withOpacity(0.15),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: const Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.video_library_rounded,
+                              color: Colors.orangeAccent, size: 16),
+                          SizedBox(width: 4),
+                          Text(
+                            'Video hot',
+                            style: TextStyle(
+                              color: Colors.orangeAccent,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
                   if (isHost || isJoined)
                     GestureDetector(
                       onTap: _showMediaPicker,
@@ -2815,6 +3005,18 @@ class _ProductDetailPageState extends State<ProductDetailPage>
             },
           ),
           const SizedBox(height: 10),
+          // 🆕 Chụp ảnh trực tiếp bằng camera máy rồi đăng luôn — cùng
+          // pattern với tile "Quay video" bên dưới, chỉ khác type='image'.
+          _MediaPickerTile(
+            icon: Icons.camera_alt_rounded,
+            title: 'Chụp ảnh',
+            subtitle: 'Chụp trực tiếp và đăng ngay',
+            onTap: () {
+              Navigator.pop(context);
+              _pickAndUpload('image', source: ImageSource.camera);
+            },
+          ),
+          const SizedBox(height: 10),
           _MediaPickerTile(
             icon: Icons.videocam_rounded,
             title: 'Chọn video',
@@ -2822,6 +3024,18 @@ class _ProductDetailPageState extends State<ProductDetailPage>
             onTap: () {
               Navigator.pop(context);
               _pickAndUpload('video');
+            },
+          ),
+          const SizedBox(height: 10),
+          // 🆕 Quay video trực tiếp bằng camera máy rồi đăng luôn — không
+          // cần quay app quay riêng rồi mới vào lại chọn từ thư viện.
+          _MediaPickerTile(
+            icon: Icons.fiber_manual_record_rounded,
+            title: 'Quay video',
+            subtitle: 'Quay trực tiếp và đăng ngay',
+            onTap: () {
+              Navigator.pop(context);
+              _pickAndUpload('video', source: ImageSource.camera);
             },
           ),
         ],
@@ -4412,30 +4626,43 @@ class _ParticipantCard extends StatelessWidget {
       const SizedBox(height: 4),
       isUpdatingAttendance
           ? _AttendanceShimmer()
-          : _AttendanceBadge(status: participant.attendanceStatus),
+          : _AttendanceBadge(
+        status: participant.attendanceStatus,
+        joinedAt: participant.joinedAt,
+      ),
     ],
   );
 }
 
 class _AttendanceBadge extends StatelessWidget {
   final AttendanceStatus status;
-  const _AttendanceBadge({required this.status});
+  final DateTime? joinedAt;
+  const _AttendanceBadge({required this.status, this.joinedAt});
 
   @override
-  Widget build(BuildContext context) => Container(
-    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-    decoration: BoxDecoration(
-      color: status.color.withOpacity(0.85),
-      borderRadius: BorderRadius.circular(10),
-    ),
-    child: Text(
-      status.shortLabel,
-      style: const TextStyle(
-          color: Colors.white,
-          fontSize: 9,
-          fontWeight: FontWeight.w600),
-    ),
-  );
+  Widget build(BuildContext context) {
+    // 🆕 Chỉ áp dụng cho case 'undecided' (mới join, chưa tự chọn trạng
+    // thái) — các trạng thái khác (Đã tới/Đang tới/Trễ/Không đi) là do
+    // user CHỦ ĐỘNG chọn, giữ nguyên label cũ vì đã đủ ý nghĩa rồi.
+    final label = status == AttendanceStatus.undecided
+        ? (_relativeJoinLabel(joinedAt) ?? status.shortLabel)
+        : status.shortLabel;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: status.color.withOpacity(0.85),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Text(
+        label,
+        style: const TextStyle(
+            color: Colors.white,
+            fontSize: 9,
+            fontWeight: FontWeight.w600),
+      ),
+    );
+  }
 }
 
 class _AttendanceShimmer extends StatelessWidget {

@@ -67,6 +67,11 @@ class _MapPageState extends State<MapPage>
 
   PhoenixSocket? _socket;
   PhoenixChannel? _onlineChannel;
+  // 🆕 Channel riêng để lắng nghe event 'new_product' (kèo mới tạo) -
+  // trước đây Map chỉ join 'online_users:lobby' (presence), không hề
+  // biết có kèo mới -> phải thoát vào lại trang Map mới thấy. Dùng
+  // CHUNG 1 PhoenixSocket với _onlineChannel (không mở kết nối mới).
+  PhoenixChannel? _productsChannel;
 
   Map<String, Map<String, dynamic>> presenceUsers = {};
   List<Map<String, dynamic>> nearbyPubs = [];
@@ -661,6 +666,7 @@ out center tags;
   Future<void> _disconnectSocket() async {
     try {
       _onlineChannel?.leave();
+      _productsChannel?.leave(); // 🆕 dọn kèm channel products:lobby
       // 👇 THÊM: đợi 1 chút để lệnh leave kịp gửi lên server trước khi đóng
       // socket -- tránh trường hợp server chưa kịp untrack presence thì
       // socket mới đã join lại, gây ra 2 metas trùng key như log đã thấy.
@@ -668,6 +674,7 @@ out center tags;
       _socket?.close();
     } catch (_) {}
     _onlineChannel = null;
+    _productsChannel = null; // 🆕
     _socket = null;
     _isConnectingSocket = false; // 👈 THÊM: reset cờ khi ngắt kết nối
   }
@@ -751,6 +758,36 @@ out center tags;
       } catch (joinErr) {
         debugPrint("❌ Phoenix join failed: $joinErr");
         // Có thể retry sau vài giây nếu muốn
+      }
+
+      // 🆕 JOIN THÊM 'products:lobby' — CÙNG socket vừa mở ở trên, không
+      // phải mở kết nối riêng. Mục đích: shop_page.dart đã lắng nghe topic
+      // này để biết có kèo mới (event 'new_product') và tự chèn vào list
+      // ngay, nhưng MapPage trước đây KHÔNG join topic này -> phải thoát
+      // vào lại trang Map mới thấy kèo mới tạo. Giờ nhận được event là gọi
+      // lại loadNearbyDeals() — dùng lại đúng API /nearby-deals đã lọc
+      // status/hết hạn chuẩn ở backend, không tự parse payload product thô
+      // (payload là response của wc/v3/products, KHÁC cấu trúc với item
+      // trả về từ /nearby-deals, tự map tay dễ sai lệch field).
+      try {
+        _productsChannel = _socket!.addChannel(topic: "products:lobby");
+        await _productsChannel!.join();
+        debugPrint("✅ Joined products:lobby thành công");
+
+        _productsChannel!.messages.listen((event) {
+          final eventName = event.event.toString().toLowerCase();
+          if (eventName.contains("new_product")) {
+            debugPrint("🆕 Nhận new_product -> reload nearbyDeals");
+            if (_currentPosition != null) {
+              loadNearbyDeals(
+                _currentPosition!.latitude,
+                _currentPosition!.longitude,
+              );
+            }
+          }
+        });
+      } catch (productsJoinErr) {
+        debugPrint("❌ Join products:lobby failed: $productsJoinErr");
       }
     } catch (e) {
       debugPrint("❌ ConnectPhoenix error: $e");
@@ -1543,8 +1580,11 @@ out center tags;
               ),*/
               TileLayer(
                 urlTemplate:
-                "https://api.maptiler.com/maps/streets/{z}/{x}/{y}.png?key=ekMdlA2wzoBPrxkE0tKf",
+                "https://api.maptiler.com/maps/streets-v2/{z}/{x}/{y}.png?key=ir6l4mlzNpCfS9y0qbny",
                 userAgentPackageName: 'com.spiritwebs.app',
+                errorTileCallback: (tile, error, stackTrace) {
+                  debugPrint("❌ Lỗi tải tile: $error");
+                },
               ),
               MarkerLayer(markers: _buildMarkers()),
             ],
